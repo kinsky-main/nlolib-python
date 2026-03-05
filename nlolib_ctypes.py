@@ -23,7 +23,7 @@ try:
         translate_callable,
     )
 except ImportError:
-    from runtime_expr import (
+    from nlolib.translate.runtime_expr import (
         RUNTIME_CONTEXT_DISPERSION_FACTOR,
         RUNTIME_CONTEXT_DISPERSION,
         RUNTIME_CONTEXT_LINEAR_FACTOR,
