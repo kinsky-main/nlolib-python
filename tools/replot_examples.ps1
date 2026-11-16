@@ -1,5 +1,5 @@
 
-$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $repoRoot
 
 $pythonExamples = @(
@@ -16,5 +16,5 @@ $pythonExamples = @(
 )
 
 foreach ($example in $pythonExamples) {
-    python "$repoRoot\examples\python\$example" --replot
+    python "$repoRoot\examples\$example" --replot
 }

@@ -4,8 +4,8 @@ import ast
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-EXAMPLES_DIR = REPO_ROOT / "examples" / "python"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+EXAMPLES_DIR = REPO_ROOT / "examples"
 
 
 def _iter_top_level_example_files() -> list[Path]:

@@ -25,7 +25,7 @@ import tempfile
 from pathlib import Path
 
 NAME = "test_python_wheel_jit_relocated"
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _case():
@@ -64,17 +64,15 @@ def _config(nlolib):
 
 
 def _stage_package(stage_dir, library):
-    """Reproduce what tools/release/build_wheel_linux.sh stages, out of tree."""
-    shutil.copy2(REPO_ROOT / "pyproject.toml", stage_dir / "pyproject.toml")
-    shutil.copy2(REPO_ROOT / "setup.py", stage_dir / "setup.py")
+    """Reproduce what tools/build_wheel_linux.sh stages, out of tree."""
+    for name in ("pyproject.toml", "setup.py", "README.md", "LICENSE"):
+        shutil.copy2(REPO_ROOT / name, stage_dir / name)
     shutil.copytree(
-        REPO_ROOT / "python",
-        stage_dir / "python",
+        REPO_ROOT / "nlolib",
+        stage_dir / "nlolib",
         ignore=shutil.ignore_patterns("__pycache__"),
     )
-    package_dir = stage_dir / "python" / "nlolib"
-    package_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(library, package_dir / library.name)
+    shutil.copy2(library, stage_dir / "nlolib" / library.name)
 
 
 def _venv_python(venv_dir):

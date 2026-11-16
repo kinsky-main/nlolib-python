@@ -17,8 +17,8 @@ from nlolib._executor import _DENSE_OUTPUT_MAX_BYTES, _COMPLEX_BYTES, Propagatio
 from nlolib._requests import _NormalizedPropagateRequest
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-EXAMPLE_PYTHON_DIR = REPO_ROOT / "examples" / "python"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+EXAMPLE_PYTHON_DIR = REPO_ROOT / "examples"
 if str(EXAMPLE_PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(EXAMPLE_PYTHON_DIR))
 

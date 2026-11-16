@@ -4,7 +4,7 @@ import re
 
 import nlolib
 
-ROOT = pathlib.Path(__file__).resolve().parents[2]
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 def test_package_surface() -> None:
@@ -31,17 +31,15 @@ def test_package_surface() -> None:
 
 
 def test_version_attribute() -> None:
-    """nlolib.__version__ must name the version this tree builds.
+    """nlolib.__version__ must name the version this tree packages.
 
-    Compared against CMakeLists.txt, the source of truth, rather than against
-    pyproject.toml that __version__ reads: that way this fails if the attribute
-    stops tracking the project version, while test_version_copies_match is what
-    fails if the copies themselves drift.
+    pyproject.toml is the source of truth for the Python package version; this
+    fails if the attribute stops tracking it.
     """
     assert hasattr(nlolib, "__version__")
-    cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
-    match = re.search(r"project\([^)]*VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)", cmake)
-    assert match, "could not parse the project version from CMakeLists.txt"
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'(?m)^version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"', pyproject)
+    assert match, "could not parse the package version from pyproject.toml"
     assert nlolib.__version__ == match.group(1), (
         f"__version__ is {nlolib.__version__}, expected {match.group(1)}"
     )

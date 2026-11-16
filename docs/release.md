@@ -3,13 +3,13 @@
 How `nlolib` wheels reach PyPI, and how to build the same wheels locally.
 
 The automated path is `.github/workflows/release-pypi.yml`. The local path is
-the three `tools/release/build_wheel_*` scripts, which the workflow itself
+the three `tools/build_wheel_*` scripts, which the workflow itself
 calls — so a release never runs a code path nobody exercises by hand.
 
 ## No published wheel was installable before this pipeline
 
 Worth knowing, because it shapes what the smoke test is for. `load()` in
-`python/nlolib/_binding.py` used to resolve exactly one path after the
+`nlolib/_binding.py` used to resolve exactly one path after the
 `NLOLIB_LIBRARY` override — `<parent-of-package>/Release/nlolib.dll` on
 Windows, `<parent-of-package>/libnlolib.so` elsewhere — and raise if it was
 missing. But `[tool.setuptools.package-data]` and the build scripts put the
@@ -19,7 +19,7 @@ No wheel ever published could be used without the user pointing
 `NLOLIB_LIBRARY` at a library by hand.
 
 It went unnoticed because a local build leaves a second copy at
-`python/Release/nlolib.dll`, outside the package, which is exactly where the
+`Release/nlolib.dll` beside the package directory, outside the package, which is exactly where the
 old lookup pointed — so in-tree development worked while the installed
 artifact did not. Neither copy is tracked in the repository.
 
@@ -78,9 +78,9 @@ for. Either way it is a high floor: `pip install nlolib` will not find a wheel
 on Ubuntu 22.04, Debian 12 or RHEL 9. It was still the right trade here:
 
 - The build needs a real `libvulkan.so` on disk and `glslangValidator` on
-  `PATH` (see `cmake/ResolveVulkan.cmake` and `cmake/NLOVulkanBackend.cmake`).
+  `PATH` (see `cmake/ResolveVulkan.cmake` and `cmake/NLOVulkanBackend.cmake` in the core repository).
   On Ubuntu both arrive as `libvulkan-dev` and `glslang-tools`, exactly as in
-  `release-mltbx.yml`, which has been building this library for a while.
+  the MATLAB toolbox release, which has been building this library for a while.
 - A `manylinux_2_28` container (AlmaLinux 8) packages neither reliably, so it
   would mean building the Vulkan loader and glslang from source inside the
   container and pre-seeding `GLSLANG_VALIDATOR` and `vulkan_loader_lib` into
@@ -113,10 +113,10 @@ touching any entry point, so its absence stays benign.
 
 ### macOS is out of scope
 
-`release-mltbx.yml` ships only `glnxa64` and `win64`, and this pipeline
+The MATLAB toolbox ships only `glnxa64` and `win64`, and this pipeline
 matches it. Two further reasons:
 
-- `tools/release/build_wheel_macos.sh` configures
+- `tools/build_wheel_macos.sh` configures
   `ENABLE_VULKAN_BACKEND=OFF`, so a macOS wheel would be a CPU-only build with
   different capabilities from the Linux and Windows wheels, published under the
   same version. That is a worse outcome than no macOS wheel.
@@ -127,39 +127,37 @@ matches it. Two further reasons:
 
 ## Automated release
 
-A tag only runs the workflows that exist at the commit it points at, and
-`release-pypi.yml` is new here. Tags made before it reached `main` -- `1.17.0`
-among them -- cannot build a wheel, and there is nothing to dispatch at them
-either, since `workflow_dispatch` resolves the workflow file at the ref it runs
-against. The first wheel has to come from a tag created after this lands.
+The package version lives in `pyproject.toml` and is independent of the core
+library version. `CORE_REF` names the core commit the wheels are built from.
 
-1. Bump the version, which is one deliberate command and rewrites
-   `CMakeLists.txt` together with every copy of it:
-
-```bash
-python tools/release/check_versions.py --bump minor
-```
-
-2. Commit that. Nothing advances the version on its own, so every commit
-   until the next bump keeps naming this release.
-3. Tag the commit with the bare version — no `v` prefix — and push the tag:
+1. In a pull request, set the new version in `pyproject.toml` and, if the
+   release needs a newer core, the new commit SHA in `CORE_REF`. CI builds that
+   core with this package and runs the tests.
+2. Merge it. Nothing advances the version on its own, so every commit until
+   the next bump keeps naming this release.
+3. Tag the merge commit with the bare version — no `v` prefix — and push the
+   tag:
 
 ```bash
-git tag 1.18.0 && git push origin 1.18.0
+git tag "$(python tools/check_version.py)"
+git push origin "$(python tools/check_version.py)"
 ```
+
+PyPI never accepts the same version twice, so the first release from this
+repository has to be higher than the last one published from the core
+repository.
 
 The workflow then runs:
 
-- **verify** — `tools/release/check_versions.py`, which fails if the tag name
-  is not the CMake project version, or if the copies in `pyproject.toml` and
-  `julia/Project.toml` disagree with it. The wheel filename carries that
-  version, so either mismatch would publish something the tag does not
-  describe. The same job, verbatim, as `release-mltbx.yml`'s.
+- **verify** — `tools/check_version.py`, which fails if the tag name is not
+  the version in `pyproject.toml`: the wheel filename carries that version, so
+  a mismatch would publish something the tag does not describe. It then checks
+  out the core at `CORE_REF` and runs the core's SBOM and API-constant checks
+  against this package.
 - **build** (per platform) — installs the Vulkan loader and glslang, pins the
   Visual Studio 2022 toolchain on Windows, runs the `build_wheel_*` script,
   then refuses any wheel tagged `-any` or carrying an unpublishable platform
-  tag. Nothing here writes a version: `verify` has already established that
-  the tree agrees on one.
+  tag. The core is checked out at `CORE_REF` into `./core` first.
 - **smoke** (per platform) — on a clean runner with no checkout and no build
   tooling, installs the wheel into a fresh virtualenv, calls `nlolib.load()`,
   and runs one small propagation on the CPU backend
@@ -182,17 +180,21 @@ opt-in so that an ordinary dry run has no outward effect at all.
 Trusted Publishing uses OIDC, so there is no API token to store. It does need
 configuring once on each index:
 
-- On PyPI, add a trusted publisher for the project: owner and repository as on
-  GitHub, workflow `release-pypi.yml`, environment `pypi`.
+- On PyPI, add a trusted publisher for the project: owner `kinsky-main`,
+  repository `nlolib-python`, workflow `release-pypi.yml`, environment `pypi`.
 - On TestPyPI, the same with environment `testpypi`.
 
 The environment names must match the `environment:` keys in the workflow or
-the OIDC claim will not be accepted.
+the OIDC claim will not be accepted. The `pypi` and `testpypi` environments
+also have to exist in this repository's settings.
 
 ## Local build
 
 Needed: Python 3.9+, CMake and a C/C++ toolchain, the Vulkan loader
-(`libvulkan-dev` / LunarG SDK) and `glslangValidator` on `PATH`.
+(`libvulkan-dev` / LunarG SDK) and `glslangValidator` on `PATH`, and a core
+checkout: `bash tools/fetch_core.sh` fetches the pinned one into `./core`. When
+this repository is the `python/` submodule of the core repository, the scripts
+use the surrounding tree instead.
 
 ```bash
 python -m pip install build auditwheel   # delvewheel on Windows
@@ -201,27 +203,24 @@ python -m pip install build auditwheel   # delvewheel on Windows
 Linux:
 
 ```bash
-./tools/release/build_wheel_linux.sh build-wheel-linux Release
+./tools/build_wheel_linux.sh build-wheel-linux Release
 ```
 
 Windows:
 
 ```powershell
-.\tools\release\build_wheel_windows.ps1 -BuildDir build-wheel-win -Config Release
+.\tools\build_wheel_windows.ps1 -BuildDir build-wheel-win -Config Release
 ```
 
 macOS (CPU-only, not published):
 
 ```bash
-./tools/release/build_wheel_macos.sh build-wheel-macos Release
+./tools/build_wheel_macos.sh build-wheel-macos Release
 ```
 
 Each script configures with `BUMP_PATCH_ON_BUILD=OFF` and
 `INSTALL_GIT_HOOKS=OFF`, and none of them touches a version. A wheel built
-from a checkout carries whatever `pyproject.toml` says, which the
-`test_version_copies_match` CTest case holds equal to `CMakeLists.txt` at
-every commit. If they ever disagree, `check_versions.py --write` is the fix,
-and it is a repair rather than a step of the build.
+from a checkout carries whatever `pyproject.toml` says.
 
 On Linux the unrepaired `linux_x86_64` wheel is deleted after a successful
 `auditwheel repair`, so everything left in `dist/` is publishable. Prefer the
@@ -233,8 +232,4 @@ python -m twine upload dist/*.whl
 
 ## Known gaps
 
-- `tools/release/read_version.py` is no longer used by any workflow. `verify`
-  used it until the version copies became an enforced invariant, and
-  `release-mltbx.yml` dropped it in the same change. It is still the way
-  `docs/release_julia.md` names the tag to cut, so it is not dead.
 - Linux and Windows x86-64 only. No aarch64 wheels on either platform.

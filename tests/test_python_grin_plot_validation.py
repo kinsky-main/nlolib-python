@@ -17,8 +17,8 @@ import sys
 
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-EXAMPLES_PYTHON = REPO_ROOT / "examples" / "python"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+EXAMPLES_PYTHON = REPO_ROOT / "examples"
 if str(EXAMPLES_PYTHON) not in sys.path:
     sys.path.insert(0, str(EXAMPLES_PYTHON))
 

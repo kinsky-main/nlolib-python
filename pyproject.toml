@@ -6,9 +6,10 @@ build-backend = "setuptools.build_meta"
 name = "nlolib"
 version = "1.20.0"
 description = "Nonlinear optics runtime wrapper with bundled nlolib shared libraries."
-readme = "python/README_PYPI.md"
+readme = "README.md"
 requires-python = ">=3.9"
 license = "GPL-2.0-or-later"
+license-files = ["LICENSE"]
 authors = [
   {name = "Wenzel Kinsky"}
 ]
@@ -21,8 +22,12 @@ classifiers = [
   "Topic :: Scientific/Engineering"
 ]
 
+[project.urls]
+Documentation = "https://kinsky-main.github.io/nlo-rk4ip-code/"
+Source = "https://github.com/kinsky-main/nlolib-python"
+"Core library" = "https://github.com/kinsky-main/nlo-rk4ip-code"
+
 [tool.setuptools]
-package-dir = {"" = "python"}
 packages = ["nlolib", "nlolib.translate"]
 include-package-data = true
 

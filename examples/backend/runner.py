@@ -13,8 +13,8 @@ from typing import Any, Callable
 import numpy as np
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-PYTHON_API_DIR = REPO_ROOT / "python"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+PYTHON_API_DIR = REPO_ROOT
 if str(PYTHON_API_DIR) not in sys.path:
     sys.path.insert(0, str(PYTHON_API_DIR))
 

@@ -1,6 +1,11 @@
 param(
     [string]$BuildDir = "build-wheel-win",
-    [string]$Config = "Release"
+    [string]$Config = "Release",
+    # Core nlolib checkout to build from. Defaults to .\core (the checkout the
+    # workflows and tools/fetch_core.sh create at the revision CORE_REF pins),
+    # then to the parent directory, for when this repository is the python\
+    # submodule of the core repository.
+    [string]$CoreDir = $env:NLOLIB_CORE_DIR
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,10 +15,21 @@ $ErrorActionPreference = "Stop"
 # exit-code check below still applies.
 $PSNativeCommandUseErrorActionPreference = $true
 
-$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $repoRoot
 
-cmake -S . -B $BuildDir `
+if (-not $CoreDir) {
+    foreach ($candidate in @((Join-Path $repoRoot "core"), (Join-Path $repoRoot ".."))) {
+        if (Test-Path (Join-Path $candidate "src\nlolib.h")) { $CoreDir = $candidate; break }
+    }
+}
+if (-not $CoreDir -or -not (Test-Path (Join-Path $CoreDir "src\nlolib.h"))) {
+    throw "No core nlolib checkout found. Run tools/fetch_core.sh, or pass -CoreDir."
+}
+$CoreDir = (Resolve-Path $CoreDir).Path
+
+cmake -S $CoreDir -B $BuildDir `
+  "-DNLOLIB_PYTHON_DIR=$repoRoot" `
   -DINSTALL_GIT_HOOKS=OFF `
   -DBUMP_PATCH_ON_BUILD=OFF `
   -DBUILD_TESTING=OFF `
@@ -26,12 +42,12 @@ cmake -S . -B $BuildDir `
 
 cmake --build $BuildDir --config $Config
 
-$pkgDir = Join-Path $repoRoot "python\nlolib"
+$pkgDir = Join-Path $repoRoot "nlolib"
 New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
 
 $dllCandidates = @(
-    (Join-Path $repoRoot "python\nlolib.dll"),
-    (Join-Path $repoRoot ("python\{0}\nlolib.dll" -f $Config)),
+    (Join-Path $repoRoot "nlolib.dll"),
+    (Join-Path $repoRoot ("{0}\nlolib.dll" -f $Config)),
     (Join-Path $repoRoot ("$BuildDir\src\$Config\nlolib.dll"))
 )
 
@@ -50,9 +66,9 @@ Copy-Item -Force $dllPath (Join-Path $pkgDir "nlolib.dll")
 
 $sqliteCandidates = @(
     (Join-Path (Split-Path $dllPath -Parent) "sqlite3.dll"),
-    (Join-Path $repoRoot "python\sqlite3.dll"),
-    (Join-Path $repoRoot "python\Release\sqlite3.dll"),
-    (Join-Path $repoRoot "python\Debug\sqlite3.dll")
+    (Join-Path $repoRoot "sqlite3.dll"),
+    (Join-Path $repoRoot "Release\sqlite3.dll"),
+    (Join-Path $repoRoot "Debug\sqlite3.dll")
 )
 foreach ($sqlitePath in $sqliteCandidates) {
     if (Test-Path $sqlitePath) {
@@ -62,7 +78,7 @@ foreach ($sqlitePath in $sqliteCandidates) {
 }
 
 if (-not (Test-Path (Join-Path $pkgDir "sqlite3.dll"))) {
-    $foundSqlite = Get-ChildItem -Recurse -File -Filter sqlite3.dll $BuildDir, "$repoRoot\python" -ErrorAction SilentlyContinue | Select-Object -First 1
+    $foundSqlite = Get-ChildItem -Recurse -File -Filter sqlite3.dll $BuildDir, $repoRoot -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($foundSqlite) {
         Copy-Item -Force $foundSqlite.FullName (Join-Path $pkgDir "sqlite3.dll")
     }

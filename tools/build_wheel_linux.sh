@@ -4,12 +4,15 @@ set -euo pipefail
 BUILD_DIR="${1:-build-wheel-linux}"
 CONFIG="${2:-Release}"
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$REPO_ROOT"
-
+# The wheel is built from this repository plus the core nlolib sources, which
+# core_dir.sh locates: ./core (tools/fetch_core.sh), or the parent directory
+# when this repository is the python/ submodule of the core repository.
+source "$(dirname "${BASH_SOURCE[0]}")/core_dir.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/cmake_options.sh"
+cd "$BINDING_ROOT"
 
-nlo_configure_verified "$BUILD_DIR" \
+NLO_SOURCE_DIR="$CORE_DIR" nlo_configure_verified "$BUILD_DIR" \
+  NLOLIB_PYTHON_DIR="$BINDING_ROOT" \
   INSTALL_GIT_HOOKS=OFF \
   BUMP_PATCH_ON_BUILD=OFF \
   BUILD_TESTING=OFF \
@@ -22,11 +25,11 @@ nlo_configure_verified "$BUILD_DIR" \
 
 cmake --build "$BUILD_DIR" --config "$CONFIG"
 
-PKG_DIR="$REPO_ROOT/python/nlolib"
+PKG_DIR="$BINDING_ROOT/nlolib"
 mkdir -p "$PKG_DIR"
 
 for candidate in \
-  "$REPO_ROOT/python/libnlolib.so" \
+  "$BINDING_ROOT/libnlolib.so" \
   "$BUILD_DIR/src/libnlolib.so" \
   "$BUILD_DIR/src/$CONFIG/libnlolib.so"; do
   if [[ -f "$candidate" ]]; then

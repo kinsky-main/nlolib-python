@@ -19,8 +19,8 @@ from backend.plotting import plot_mode_power_exchange, plot_total_error_over_pro
 from backend.storage import ExampleRunDB
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-PYTHON_API_DIR = REPO_ROOT / "python"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PYTHON_API_DIR = REPO_ROOT
 if str(PYTHON_API_DIR) not in sys.path:
     sys.path.insert(0, str(PYTHON_API_DIR))
 

@@ -94,7 +94,7 @@ _TIME_WINDOW = 2.56
 _X_WINDOW = 4.80
 _Y_WINDOW = 4.80
 _DEFAULT_MMTOOLS_SUMMARY_CSV = Path(
-    "examples/matlab/output/mmtools_tensor_scaling/mmtools_tensor_scaling_results.csv"
+    "matlab/examples/output/mmtools_tensor_scaling/mmtools_tensor_scaling_results.csv"
 )
 _MMTOOLS_REQUIRED_COLUMNS = (
     "solver",

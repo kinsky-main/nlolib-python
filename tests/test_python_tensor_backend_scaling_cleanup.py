@@ -47,8 +47,8 @@ def _row(
 
 
 def test_runtime_plot_helpers() -> None:
-    repo_root = Path(__file__).resolve().parents[2]
-    examples_dir = repo_root / "examples" / "python"
+    repo_root = Path(__file__).resolve().parents[1]
+    examples_dir = repo_root / "examples"
     if str(examples_dir) not in sys.path:
         sys.path.insert(0, str(examples_dir))
 
