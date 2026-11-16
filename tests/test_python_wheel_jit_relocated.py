@@ -54,10 +54,9 @@ def _config(nlolib):
         delta_time=dt,
         frequency_grid=omega,
         runtime=nlolib.RuntimeOperators(
-            linear_factor_expr="i*c0*(w*w)",
-            linear_expr="exp(h*D)",
-            nonlinear_expr="i*A*c1*I",
-            constants=[-0.005, 80.0],
+            dispersion_factor_fn=lambda A, w: 1j * -0.005 * (w * w),
+            dispersion_fn=lambda A, D, h: math.exp(h * D),
+            nonlinear_fn=lambda A, I: 1j * A * 80.0 * I,
         ),
     )
     return cfg, field

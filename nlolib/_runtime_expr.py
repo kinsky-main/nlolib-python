@@ -1,5 +1,8 @@
 """
-Callable-to-runtime-expression translation utilities.
+Private lowering of operator callables to the C API's runtime expression strings.
+
+The C API consumes operator expressions as strings; the Python API accepts only
+callables, which are translated here. Nothing in this module is public.
 """
 
 from __future__ import annotations
@@ -98,7 +101,7 @@ def _extract_expr_from_callable(func: Callable[..., Any]) -> ast.AST:
         source = textwrap.dedent(inspect.getsource(func))
     except (OSError, TypeError) as exc:
         raise ValueError(
-            "unable to inspect callable source; pass an explicit expression string instead"
+            "unable to inspect callable source; define the operator as a lambda or def in a source file"
         ) from exc
 
     tree = ast.parse(source)
@@ -160,7 +163,7 @@ class _ExpressionTranslator:
         if not self._auto_capture or name not in self._captured_scope:
             raise ValueError(
                 f"unknown identifier '{name}' in runtime callable; "
-                "add it to constant_bindings or use an explicit expression string"
+                "bind it through OperatorSpec params / constant_bindings or capture a real scalar"
             )
 
         value = self._captured_scope[name]

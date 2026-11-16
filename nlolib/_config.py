@@ -22,7 +22,7 @@ from ._binding import (
     make_complex_array,
 )
 from ._models import OperatorSpec, ProgressInfo, PulseSpec, RuntimeOperators
-from .translate.runtime_expr import (
+from ._runtime_expr import (
     RUNTIME_CONTEXT_DISPERSION,
     RUNTIME_CONTEXT_DISPERSION_FACTOR,
     RUNTIME_CONTEXT_LINEAR,
@@ -31,17 +31,6 @@ from .translate.runtime_expr import (
     RUNTIME_CONTEXT_POTENTIAL,
     translate_callable,
 )
-
-
-_LINEAR_OPERATOR_PRESETS: dict[str, dict[str, object]] = {
-    "none": {"expr": "0", "params": {}},
-    "gvd": {"expr": "i*beta2*w*w-loss", "params": {"beta2": -0.5, "loss": 0.0}},
-}
-
-_NONLINEAR_OPERATOR_PRESETS: dict[str, dict[str, object]] = {
-    "none": {"expr": "0", "params": {}},
-    "kerr": {"expr": "i*gamma*A*I", "params": {"gamma": 1.0}},
-}
 
 
 def _default_frequency_grid(num_time_samples: int, delta_time: float) -> list[complex]:
@@ -153,79 +142,42 @@ def _solver_profile_defaults(profile: str, propagation_distance: float) -> dict[
     raise ValueError(f"unsupported preset '{profile}'")
 
 
-def _parameterize_expression(
-    expression: str,
-    params: Mapping[str, float] | Sequence[float] | None,
-    offset: int,
-) -> tuple[str, list[float]]:
-    if params is None:
-        return expression, []
-
-    if isinstance(params, Mapping):
-        rewritten = expression
-        constants: list[float] = []
-        for idx, (name, value) in enumerate(params.items()):
-            if not re.match(r"^[A-Za-z_]\w*$", name):
-                raise ValueError(f"invalid parameter name '{name}'")
-            rewritten = re.sub(rf"\b{re.escape(name)}\b", f"c{offset + idx}", rewritten)
-            constants.append(float(value))
-        return rewritten, constants
-
-    constants = [float(value) for value in params]
-    if not constants:
-        return expression, constants
-    return _shift_constant_indices(expression, offset), constants
-
-
-def _coerce_operator_spec(operator: str | OperatorSpec | Mapping[str, object]) -> OperatorSpec:
-    if isinstance(operator, OperatorSpec):
-        return operator
-    if isinstance(operator, str):
-        return OperatorSpec(expr=operator)
-    if isinstance(operator, Mapping):
-        expr = operator.get("expr")
-        fn = operator.get("fn")
-        params = operator.get("params")
-        return OperatorSpec(
-            expr=str(expr) if expr is not None else None,
-            fn=fn if callable(fn) else None,
-            params=params if params is None or isinstance(params, (Mapping, Sequence)) else None,
+def _reject_string_operator(name: str, operator: object) -> None:
+    if isinstance(operator, (str, bytes)):
+        raise TypeError(
+            f"{name} must be a callable, not a string; expression strings are no longer "
+            "accepted (write e.g. lambda A, w: 1j * beta2 * w * w)"
         )
-    raise ValueError("operator must be a preset string, OperatorSpec, or mapping")
+
+
+def _coerce_operator_spec(name: str, operator: object) -> OperatorSpec:
+    _reject_string_operator(name, operator)
+    if isinstance(operator, OperatorSpec):
+        spec = operator
+    elif callable(operator):
+        spec = OperatorSpec(fn=operator)
+    elif isinstance(operator, Mapping):
+        if "expr" in operator:
+            raise TypeError(f"{name}: 'expr' is no longer accepted; pass a callable as 'fn'")
+        spec = OperatorSpec(fn=operator.get("fn"), params=operator.get("params"))  # type: ignore[arg-type]
+    else:
+        raise TypeError(f"{name} must be a callable or an OperatorSpec, got {type(operator).__name__}")
+    _reject_string_operator(f"{name}.fn", spec.fn)
+    if not callable(spec.fn):
+        raise TypeError(f"{name}.fn must be callable")
+    if spec.params is not None and not isinstance(spec.params, Mapping):
+        raise TypeError(f"{name}.params must be a mapping of name to value")
+    return spec
 
 
 def _resolve_operator_spec(
-    context: str,
-    operator: str | OperatorSpec | Mapping[str, object],
-    offset: int,
-) -> tuple[str | None, object | None, list[float], Mapping[str, float] | None]:
-    presets = _LINEAR_OPERATOR_PRESETS if context == "linear" else _NONLINEAR_OPERATOR_PRESETS
-
-    spec = _coerce_operator_spec(operator)
+    name: str,
+    operator: object,
+) -> tuple[object, Mapping[str, float] | None]:
+    spec = _coerce_operator_spec(name, operator)
     params = spec.params
-    expr = spec.expr
-    fn = spec.fn
-
-    if expr is not None and fn is not None:
-        raise ValueError(f"{context} operator cannot define both expr and fn")
-
-    if fn is None and expr is not None and expr in presets:
-        preset_entry = presets[expr]
-        expr = str(preset_entry["expr"])
-        params = preset_entry.get("params")  # type: ignore[assignment]
-
-    if expr is None and fn is None:
-        raise ValueError(f"{context} operator must define expr/fn or a known preset")
-
-    if fn is not None:
-        if params is not None and not isinstance(params, Mapping):
-            raise ValueError(f"{context} callable operator params must be a mapping")
-        bindings = {name: float(value) for name, value in params.items()} if isinstance(params, Mapping) else None
-        return None, fn, [], bindings
-
-    assert expr is not None
-    resolved_expr, constants = _parameterize_expression(expr, params, offset)
-    return resolved_expr, None, constants, None
+    bindings = {key: float(value) for key, value in params.items()} if params is not None else None
+    return spec.fn, bindings
 
 
 def _decode_storage_run_id(raw: bytes) -> str:
@@ -483,6 +435,23 @@ def prepare_sim_config(
         constants = [float(value) for value in runtime.constants]
         constant_bindings = runtime.constant_bindings
         auto_capture = bool(runtime.auto_capture_constants)
+
+        def lower(name: str, fn: object, context: str) -> str | None:
+            if fn is None:
+                return None
+            _reject_string_operator(f"runtime.{name}", fn)
+            if not callable(fn):
+                raise TypeError(f"runtime.{name} must be callable")
+            translated = translate_callable(
+                fn,
+                context,
+                constant_bindings=constant_bindings,
+                auto_capture=auto_capture,
+            )
+            shifted = _shift_constant_indices(translated.expression, len(constants))
+            constants.extend(translated.constants)
+            return shifted
+
         physics_cfg.runtime.nonlinear_model = int(runtime.nonlinear_model)
         physics_cfg.runtime.nonlinear_gamma = float(runtime.nonlinear_gamma)
         physics_cfg.runtime.raman_fraction = float(runtime.raman_fraction)
@@ -501,90 +470,29 @@ def prepare_sim_config(
             physics_cfg.runtime.raman_response_time = None
             physics_cfg.runtime.raman_response_len = 0
 
-        if runtime.linear_factor_expr and runtime.dispersion_factor_expr:
-            raise ValueError(
-                "runtime.linear_factor_expr and runtime.dispersion_factor_expr are aliases; provide only one"
-            )
-        if runtime.linear_expr and runtime.dispersion_expr:
-            raise ValueError("runtime.linear_expr and runtime.dispersion_expr are aliases; provide only one")
         if runtime.linear_factor_fn is not None and runtime.dispersion_factor_fn is not None:
             raise ValueError("runtime.linear_factor_fn and runtime.dispersion_factor_fn are aliases; provide only one")
         if runtime.linear_fn is not None and runtime.dispersion_fn is not None:
             raise ValueError("runtime.linear_fn and runtime.dispersion_fn are aliases; provide only one")
-        if runtime.nonlinear_expr and runtime.nonlinear_fn is not None:
-            raise ValueError("runtime.nonlinear_expr and runtime.nonlinear_fn are mutually exclusive")
-        if runtime.potential_expr and runtime.potential_fn is not None:
-            raise ValueError("runtime.potential_expr and runtime.potential_fn are mutually exclusive")
 
-        linear_factor_expr = (
-            runtime.linear_factor_expr
-            if runtime.linear_factor_expr is not None
-            else runtime.dispersion_factor_expr
-        )
-        linear_factor_fn = runtime.linear_factor_fn
-        linear_factor_context = RUNTIME_CONTEXT_LINEAR_FACTOR
-        if linear_factor_fn is None and runtime.dispersion_factor_fn is not None:
-            linear_factor_fn = runtime.dispersion_factor_fn
-            linear_factor_context = RUNTIME_CONTEXT_DISPERSION_FACTOR
-        if linear_factor_expr and linear_factor_fn is not None:
-            raise ValueError("runtime linear/dispersive factor expression and callable are mutually exclusive")
-        if linear_factor_fn is not None:
-            translated = translate_callable(
-                linear_factor_fn,
-                linear_factor_context,
-                constant_bindings=constant_bindings,
-                auto_capture=auto_capture,
+        if runtime.linear_factor_fn is not None:
+            linear_factor_expr = lower("linear_factor_fn", runtime.linear_factor_fn, RUNTIME_CONTEXT_LINEAR_FACTOR)
+        else:
+            linear_factor_expr = lower(
+                "dispersion_factor_fn",
+                runtime.dispersion_factor_fn,
+                RUNTIME_CONTEXT_DISPERSION_FACTOR,
             )
-            shifted = _shift_constant_indices(translated.expression, len(constants))
-            constants.extend(translated.constants)
-            linear_factor_expr = shifted
-
-        linear_expr = runtime.linear_expr if runtime.linear_expr is not None else runtime.dispersion_expr
-        linear_fn = runtime.linear_fn
-        linear_context = RUNTIME_CONTEXT_LINEAR
-        if linear_fn is None and runtime.dispersion_fn is not None:
-            linear_fn = runtime.dispersion_fn
-            linear_context = RUNTIME_CONTEXT_DISPERSION
-        if linear_expr and linear_fn is not None:
-            raise ValueError("runtime linear/dispersive expression and callable are mutually exclusive")
-        if linear_fn is not None:
-            translated = translate_callable(
-                linear_fn,
-                linear_context,
-                constant_bindings=constant_bindings,
-                auto_capture=auto_capture,
-            )
-            shifted = _shift_constant_indices(translated.expression, len(constants))
-            constants.extend(translated.constants)
-            linear_expr = shifted
-
-        potential_expr = runtime.potential_expr
-        if runtime.potential_fn is not None:
-            translated = translate_callable(
-                runtime.potential_fn,
-                RUNTIME_CONTEXT_POTENTIAL,
-                constant_bindings=constant_bindings,
-                auto_capture=auto_capture,
-            )
-            shifted = _shift_constant_indices(translated.expression, len(constants))
-            constants.extend(translated.constants)
-            potential_expr = shifted
-
-        nonlinear_expr = runtime.nonlinear_expr
-        if runtime.nonlinear_fn is not None:
-            translated = translate_callable(
-                runtime.nonlinear_fn,
-                RUNTIME_CONTEXT_NONLINEAR,
-                constant_bindings=constant_bindings,
-                auto_capture=auto_capture,
-            )
-            shifted = _shift_constant_indices(translated.expression, len(constants))
-            constants.extend(translated.constants)
-            nonlinear_expr = shifted
+        if runtime.linear_fn is not None:
+            linear_expr = lower("linear_fn", runtime.linear_fn, RUNTIME_CONTEXT_LINEAR)
+        else:
+            linear_expr = lower("dispersion_fn", runtime.dispersion_fn, RUNTIME_CONTEXT_DISPERSION)
+        potential_expr = lower("potential_fn", runtime.potential_fn, RUNTIME_CONTEXT_POTENTIAL)
+        nonlinear_expr = lower("nonlinear_fn", runtime.nonlinear_fn, RUNTIME_CONTEXT_NONLINEAR)
 
         if len(constants) > RUNTIME_OPERATOR_CONSTANTS_MAX:
             raise ValueError(
-                "runtime.constants length exceeds "
+                "runtime.constants plus captured callable constants exceed "
                 f"{RUNTIME_OPERATOR_CONSTANTS_MAX}"
             )
 

@@ -16,6 +16,7 @@ from nlolib import (
     default_execution_options,
     prepare_sim_config,
 )
+from nlolib import propagate as nlolib_propagate
 
 
 def _max_abs_diff(a, b):
@@ -81,9 +82,8 @@ def main():
         delta_time=0.001,
         frequency_grid=[0j] * n,
         runtime=RuntimeOperators(
-            dispersion_factor_expr="0",
-            nonlinear_expr="0",
-            constants=[0.0, 0.0, 0.0, 0.0],
+            dispersion_factor_fn=lambda A, w: 0.0,
+            nonlinear_fn=lambda A, I: 0.0,
         ),
     )
     gaussian = [complex(math.exp(-((i - 0.5 * n) / 18.0) ** 2), 0.0) for i in range(n)]
@@ -219,8 +219,8 @@ def main():
     )
     sim_result = api.propagate(
         pulse,
-        "gvd",
-        "kerr",
+        lambda A, w: 1j * -0.5 * w * w,
+        lambda A, I: 1j * A * I,
         propagation_distance=0.02,
         preset="balanced",
         exec_options=cpu_opts,
@@ -233,8 +233,8 @@ def main():
 
     explicit_result = api.propagate(
         pulse,
-        OperatorSpec(expr="i*beta2*w*w", params={"beta2": -0.5}),
-        OperatorSpec(expr="i*gamma*A*I", params={"gamma": 1.0}),
+        OperatorSpec(fn=lambda A, w: 1j * beta2 * w * w, params={"beta2": -0.5}),
+        OperatorSpec(fn=lambda A, I: 1j * gamma * A * I, params={"gamma": 1.0}),
         propagation_distance=0.02,
         records=16,
         exec_options=cpu_opts,
@@ -260,8 +260,11 @@ def main():
     )
     coupled_result = api.propagate(
         pulse_coupled,
-        OperatorSpec(expr="i*(beta2*wt*wt + beta_t*(kx*kx + ky*ky))", params={"beta2": 0.0, "beta_t": 0.0}),
-        OperatorSpec(expr="i*A*(gamma*I + V)", params={"gamma": 0.0}),
+        OperatorSpec(
+            fn=lambda A, wt, kx, ky: 1j * (beta2 * wt * wt + beta_t * (kx * kx + ky * ky)),
+            params={"beta2": 0.0, "beta_t": 0.0},
+        ),
+        OperatorSpec(fn=lambda A, I, V: 1j * A * (gamma * I + V), params={"gamma": 0.0}),
         propagation_distance=0.01,
         records=2,
         exec_options=cpu_opts,
@@ -301,9 +304,8 @@ def main():
         delta_time=0.001,
         frequency_grid=[0j] * n,
         runtime=RuntimeOperators(
-            dispersion_factor_expr="0",
-            nonlinear_expr="0",
-            constants=[0.0, 0.0, 0.0, 0.0],
+            dispersion_factor_fn=lambda A, w: 0.0,
+            nonlinear_fn=lambda A, I: 0.0,
         ),
     )
     fixed_aligned = api.propagate(
@@ -338,9 +340,9 @@ def main():
     try:
         api.propagate(
             pulse,
-            "gvd",
-            "kerr",
-            transverse_operator=OperatorSpec(expr="i*beta_t*w", params={"beta_t": 0.0}),
+            lambda A, w: 0.0,
+            lambda A, I: 0.0,
+            transverse_operator=lambda A, w: 0.0,
             propagation_distance=0.01,
             records=2,
             exec_options=cpu_opts,
@@ -350,19 +352,56 @@ def main():
         assert "transverse_operator has been removed" in str(exc)
     print("test_python_api_smoke: removed transverse_operator kwarg rejected as expected.")
 
+    string_operators = [
+        ("preset string", "gvd"),
+        ("expression string", "i*beta2*w*w"),
+        ("OperatorSpec.fn string", OperatorSpec(fn="i*beta2*w*w")),
+        ("mapping expr", {"expr": "i*beta2*w*w"}),
+    ]
+    for label, operator in string_operators:
+        try:
+            api.propagate(
+                pulse,
+                operator,
+                lambda A, I: 0.0,
+                propagation_distance=0.02,
+                exec_options=cpu_opts,
+            )
+            raise AssertionError(f"expected {label} operator to be rejected")
+        except TypeError as exc:
+            assert "linear_operator" in str(exc), str(exc)
     try:
-        api.propagate(
-            pulse,
-            OperatorSpec(expr="0", fn=lambda A, w: 0.0),  # noqa: E731
-            "kerr",
-            propagation_distance=0.02,
-            exec_options=cpu_opts,
+        nlolib_propagate(pulse, lambda A, w: 0.0, "i*A*I", propagation_distance=0.02)
+        raise AssertionError("expected string operator to be rejected by nlolib.propagate")
+    except TypeError as exc:
+        assert "nonlinear_operator" in str(exc), str(exc)
+    try:
+        prepare_sim_config(
+            n,
+            propagation_distance=0.01,
+            starting_step_size=1e-3,
+            max_step_size=1e-3,
+            min_step_size=1e-3,
+            error_tolerance=1e-7,
+            pulse_period=1.0,
+            delta_time=0.001,
+            frequency_grid=[0j] * n,
+            runtime=RuntimeOperators(nonlinear_fn="i*A*I"),
         )
-        raise AssertionError("expected mixed expr/fn operator to fail")
-    except ValueError as exc:
-        assert "cannot define both expr and fn" in str(exc)
-    print("test_python_api_smoke: invalid mixed operator spec rejected as expected.")
-
+        raise AssertionError("expected string runtime operator to be rejected")
+    except TypeError as exc:
+        assert "runtime.nonlinear_fn" in str(exc), str(exc)
+    try:
+        RuntimeOperators(nonlinear_expr="i*A*I")
+        raise AssertionError("expected removed RuntimeOperators.nonlinear_expr to fail")
+    except TypeError:
+        pass
+    try:
+        api.propagate(pulse, propagation_distance=0.02, exec_options=cpu_opts)
+        raise AssertionError("expected missing operators to fail")
+    except TypeError as exc:
+        assert "requires linear_operator and nonlinear_operator" in str(exc)
+    print("test_python_api_smoke: string and missing operators rejected with TypeError.")
 
 if __name__ == "__main__":
     main()

@@ -12,12 +12,12 @@ from ._binding import NONLINEAR_MODEL_EXPR, TENSOR_LAYOUT_XYT_T_FAST
 
 @dataclass
 class RuntimeOperators:
-    linear_factor_expr: str | None = None
-    linear_expr: str | None = None
-    potential_expr: str | None = None
-    dispersion_factor_expr: str | None = None
-    dispersion_expr: str | None = None
-    nonlinear_expr: str | None = None
+    """Runtime operators for `prepare_sim_config`, each given as a callable.
+
+    Callables are lowered to the C runtime expression language internally;
+    expression strings are not accepted.
+    """
+
     linear_factor_fn: Callable[..., object] | None = None
     linear_fn: Callable[..., object] | None = None
     potential_fn: Callable[..., object] | None = None
@@ -31,6 +31,9 @@ class RuntimeOperators:
     raman_tau2: float = 0.0320
     shock_omega0: float = 0.0
     raman_response_time: Sequence[complex] | None = None
+    #: Coefficients c0, c1, ... for the core's built-in default operators,
+    #: used for any operator left unset. Constants captured from callables are
+    #: appended after these.
     constants: Sequence[float] = ()
     constant_bindings: Mapping[str, float] | None = None
     auto_capture_constants: bool = True
@@ -54,9 +57,14 @@ class PulseSpec:
 
 @dataclass
 class OperatorSpec:
-    expr: str | None = None
-    fn: Callable[..., object] | None = None
-    params: Mapping[str, float] | Sequence[float] | None = None
+    """A propagation operator given as a callable, plus optional named params.
+
+    ``fn`` is a lambda or ``def`` whose body is a single expression, e.g.
+    ``lambda A, w: 1j * beta2 * w * w``. ``params`` binds free names in it.
+    """
+
+    fn: Callable[..., object]
+    params: Mapping[str, float] | None = None
 
 
 @dataclass

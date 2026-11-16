@@ -28,7 +28,7 @@ Source = "https://github.com/kinsky-main/nlolib-python"
 "Core library" = "https://github.com/kinsky-main/nlo-rk4ip-code"
 
 [tool.setuptools]
-packages = ["nlolib", "nlolib.translate"]
+packages = ["nlolib"]
 include-package-data = true
 
 [tool.setuptools.package-data]

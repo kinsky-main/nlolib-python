@@ -215,11 +215,11 @@ def _build_case(runner: NloExampleRunner, case: TensorCase):
     y_axis = _centered_spatial_grid(case.ny, dy)
     omega = 2.0 * np.pi * np.fft.fftfreq(case.nt, d=dt)
     field0 = _flatten_tfast(_gaussian_tensor_field(t_axis, x_axis, y_axis))
+    beta_t, beta_x, gamma = 0.04, -0.20, 0.015
     runtime = nlo.RuntimeOperators(
-        linear_factor_expr="i*(c0*wt*wt + c1*(kx*kx + ky*ky))",
-        linear_expr="exp(h*D)",
-        nonlinear_expr="i*A*(c2*I)",
-        constants=[0.04, -0.20, 0.015],
+        linear_factor_fn=lambda A, wt, kx, ky: 1j * (beta_t * wt * wt + beta_x * (kx * kx + ky * ky)),
+        linear_fn=lambda A, D, h: np.exp(h * D),
+        nonlinear_fn=lambda A, I: 1j * A * (gamma * I),
     )
     config = nlo.prepare_sim_config(
         case.total_points,

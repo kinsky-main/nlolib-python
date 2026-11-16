@@ -1,6 +1,6 @@
 import math
 
-from nlolib.translate.runtime_expr import (
+from nlolib._runtime_expr import (
     RUNTIME_CONTEXT_DISPERSION_FACTOR,
     RUNTIME_CONTEXT_LINEAR_FACTOR,
     RUNTIME_CONTEXT_POTENTIAL,

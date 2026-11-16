@@ -23,9 +23,8 @@ def main() -> None:
         delta_time=dt,
         frequency_grid=omega,
         runtime=nlolib.RuntimeOperators(
-            linear_factor_expr="i*c0*wt*wt",
-            nonlinear_expr="i*A*(c1*I)",
-            constants=[0.02, 0.01],
+            linear_factor_fn=lambda A, wt: 1j * 0.02 * wt * wt,
+            nonlinear_fn=lambda A, I: 1j * A * (0.01 * I),
         ),
     )
     field0 = [complex(math.exp(-((idx - 0.5 * n) / 10.0) ** 2), 0.0) for idx in range(n)]

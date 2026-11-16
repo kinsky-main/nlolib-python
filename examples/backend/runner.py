@@ -192,7 +192,6 @@ class NloExampleRunner:
             "raman_tau2",
             "shock_omega0",
             "raman_response_time",
-            "constants",
             "constant_bindings",
             "auto_capture_constants",
         ):
