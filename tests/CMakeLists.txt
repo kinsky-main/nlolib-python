@@ -6,6 +6,10 @@ get_filename_component(_PY_PKG_DIR "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 set(_NLOLIB_TEST_PATH "$ENV{PATH}")
 string(REPLACE ";" "\;" _NLOLIB_TEST_PATH "${_NLOLIB_TEST_PATH}")
 
+# test_python_runtime_limits_grid: the grid-dependent runtime limits are zero
+# unless the config states its own sample count, which a config prepared for
+# propagation does not.
+#
 # test_python_wheel_jit_relocated builds the package, installs it into a fresh
 # virtualenv outside the source tree, and asserts from there that a Vulkan run
 # took the operator JIT path; skips without Vulkan. Nothing else covers the
@@ -26,6 +30,7 @@ foreach(_test
     test_python_reference_benchmarks
     test_python_package_surface
     test_python_perf_profile
+    test_python_runtime_limits_grid
     test_python_second_order_soliton_plot_cleanup
     test_python_tensor_backend_scaling_cleanup
     test_python_wheel_jit_relocated
