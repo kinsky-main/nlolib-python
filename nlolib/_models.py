@@ -1,46 +1,25 @@
 """
-Public Python-side model types for the nlolib wrapper.
+Public data types and errors of the nlolib Python package.
+
+The names and field order follow the shared binding vocabulary
+(docs/binding_api_vocabulary.md in the core repository).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping, Sequence
-
-from ._binding import NONLINEAR_MODEL_EXPR, TENSOR_LAYOUT_XYT_T_FAST
-
-
-@dataclass
-class RuntimeOperators:
-    """Runtime operators for `prepare_sim_config`, each given as a callable.
-
-    Callables are lowered to the C runtime expression language internally;
-    expression strings are not accepted.
-    """
-
-    linear_factor_fn: Callable[..., object] | None = None
-    linear_fn: Callable[..., object] | None = None
-    potential_fn: Callable[..., object] | None = None
-    dispersion_factor_fn: Callable[..., object] | None = None
-    dispersion_fn: Callable[..., object] | None = None
-    nonlinear_fn: Callable[..., object] | None = None
-    nonlinear_model: int = NONLINEAR_MODEL_EXPR
-    nonlinear_gamma: float = 0.0
-    raman_fraction: float = 0.0
-    raman_tau1: float = 0.0122
-    raman_tau2: float = 0.0320
-    shock_omega0: float = 0.0
-    raman_response_time: Sequence[complex] | None = None
-    #: Coefficients c0, c1, ... for the core's built-in default operators,
-    #: used for any operator left unset. Constants captured from callables are
-    #: appended after these.
-    constants: Sequence[float] = ()
-    constant_bindings: Mapping[str, float] | None = None
-    auto_capture_constants: bool = True
+from typing import Any, Sequence
 
 
 @dataclass
 class PulseSpec:
+    """Input field and the grids it lives on.
+
+    A temporal run gives ``samples`` and ``delta_time``. A tensor run also sets
+    ``tensor_nt``, ``tensor_nx`` and ``tensor_ny``, with ``samples`` flattened
+    time fastest: ``index = ((x * ny) + y) * nt + t``.
+    """
+
     samples: Sequence[complex]
     delta_time: float
     pulse_period: float | None = None
@@ -48,36 +27,95 @@ class PulseSpec:
     tensor_nt: int | None = None
     tensor_nx: int | None = None
     tensor_ny: int | None = None
-    tensor_layout: int = TENSOR_LAYOUT_XYT_T_FAST
     delta_x: float = 1.0
     delta_y: float = 1.0
     spatial_frequency_grid: Sequence[complex] | None = None
     potential_grid: Sequence[complex] | None = None
+    wt_axis: Sequence[complex] | None = None
+    kx_axis: Sequence[complex] | None = None
+    ky_axis: Sequence[complex] | None = None
 
 
 @dataclass
-class OperatorSpec:
-    """A propagation operator given as a callable, plus optional named params.
+class ExecutionOptions:
+    """Backend selection and device budget for one propagate call.
 
-    ``fn`` is a lambda or ``def`` whose body is a single expression, e.g.
-    ``lambda A, w: 1j * beta2 * w * w``. ``params`` binds free names in it.
+    ``backend_type`` is ``"cpu"``, ``"vulkan"`` or ``"auto"``; ``fft_backend``
+    is ``"auto"``, ``"fftw"`` or ``"vkfft"``.
     """
 
-    fn: Callable[..., object]
-    params: Mapping[str, float] | None = None
+    backend_type: str = "auto"
+    fft_backend: str = "auto"
+    device_heap_fraction: float = 0.70
+    record_ring_target: int = 0
+    forced_device_budget_bytes: int = 0
+
+
+@dataclass
+class StorageOptions:
+    """Stream records to a SQLite database.
+
+    ``run_id`` is at most 63 characters; ``cap_policy`` is ``"stop_writes"``
+    or ``"fail"`` and applies when ``sqlite_max_bytes`` is reached.
+    """
+
+    sqlite_path: str
+    run_id: str | None = None
+    sqlite_max_bytes: int = 0
+    chunk_records: int = 0
+    cap_policy: str = "stop_writes"
+    log_final_output_field_to_db: bool = False
+
+
+@dataclass
+class StepHistory:
+    """Accepted solver steps, captured when ``capture_step_history`` is set."""
+
+    step_index: list[int]
+    z: list[float]
+    step_size: list[float]
+    next_step_size: list[float]
+    error: list[float]
+    dropped: int
+    capacity: int
+
+
+@dataclass
+class StorageResult:
+    """What a storage-backed propagate wrote to the database."""
+
+    run_id: str
+    records_captured: int
+    records_spilled: int
+    chunks_written: int
+    db_size_bytes: int
+    truncated: bool
 
 
 @dataclass
 class PropagationResult:
+    """Result of `propagate`.
+
+    ``records`` is a list of rows, one per recorded position in ``z_axis``.
+    ``step_history`` is None unless ``capture_step_history`` was set, and
+    ``storage_result`` is None unless ``storage`` was given. ``meta`` holds
+    ``preset``, ``records_requested``, ``records_written``,
+    ``backend_requested``, ``coupled`` and ``status``.
+    """
+
     records: list[list[complex]]
     z_axis: list[float]
     final: list[complex]
+    step_history: StepHistory | None
+    storage_result: StorageResult | None
     meta: dict[str, Any]
 
 
 @dataclass(frozen=True)
 class ProgressInfo:
-    event_type: int
+    """One progress event; ``event_type`` is ``"accepted"``, ``"rejected"`` or ``"finish"``."""
+
+    event_type: str
     step_index: int
     reject_attempt: int
     z: float
@@ -90,7 +128,56 @@ class ProgressInfo:
     eta_seconds: float
 
 
-class PropagationAbortedError(RuntimeError):
+@dataclass(frozen=True)
+class RuntimeLimits:
+    """Solver limits for the current backend; the C ``runtime_limits``."""
+
+    max_num_time_samples_runtime: int
+    max_num_recorded_samples_in_memory: int
+    max_num_recorded_samples_with_storage: int
+    estimated_required_working_set_bytes: int
+    estimated_device_budget_bytes: int
+    storage_available: bool
+
+
+@dataclass(frozen=True)
+class PerfProfileSnapshot:
+    """Accumulated performance counters; the C ``nlo_perf_profile_snapshot``."""
+
+    dispersion_ms: float
+    nonlinear_ms: float
+    dispersion_calls: int
+    nonlinear_calls: int
+    gpu_dispatch_count: int
+    gpu_copy_count: int
+    gpu_device_copy_count: int
+    gpu_device_copy_bytes: int
+    gpu_host_transfer_copy_count: int
+    gpu_host_transfer_copy_bytes: int
+    gpu_memory_pass_count: int
+    gpu_memory_pass_bytes: int
+    gpu_upload_count: int
+    gpu_download_count: int
+    gpu_upload_bytes: int
+    gpu_download_bytes: int
+    operator_jit_programs: int
+    operator_jit_fallbacks: int
+
+
+class NlolibError(RuntimeError):
+    """A C call returned a non-OK status, or the loaded build lacks a feature.
+
+    ``status`` is the status string, e.g. ``"invalid_argument"``.
+    """
+
+    def __init__(self, status: str, message: str):
+        super().__init__(f"{message} (status={status})")
+        self.status = status
+
+
+class PropagationAbortedError(NlolibError):
+    """The progress callback stopped the run; ``result`` holds what was recorded."""
+
     def __init__(self, result: PropagationResult):
-        super().__init__("nlolib_propagate aborted by progress callback")
+        super().__init__("aborted", "propagate aborted by progress callback")
         self.result = result

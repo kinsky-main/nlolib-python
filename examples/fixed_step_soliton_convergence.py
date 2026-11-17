@@ -34,7 +34,7 @@ ADAPTIVE_TOLERANCES = np.asarray([1.0e-4, 1.0e-5, 1.0e-6, 1.0e-7, 1.0e-8, 1.0e-9
 
 def _configure_runtime_logging(runner: NloExampleRunner) -> None:
     try:
-        runner.api.set_log_level(runner.nlo.NLOLIB_LOG_LEVEL_ERROR)
+        runner.api.set_log_level("error")
     except Exception:
         pass
     try:
@@ -132,7 +132,7 @@ def _run(args) -> float:
     a0 = (math.sqrt(p0) / np.cosh(tau)).astype(np.complex128)
 
     db = ExampleRunDB(args.db_path)
-    example_name = "fixed_step_soliton_convergence_rk4ip"
+    example_name = "fixed_step_soliton_convergence"
 
     target_records = 2
 
@@ -207,11 +207,11 @@ def _run(args) -> float:
                 exec_options=exec_options,
                 **storage_kwargs,
             )
-            db.save_case_from_solver_meta(
+            db.save_case_from_result(
                 example_name=example_name,
                 run_group=run_group,
                 case_key=case_key,
-                solver_meta=runner.last_meta,
+                result=runner.last_result,
                 meta={
                     "mode": "fixed",
                     "step_count": int(step_count),
@@ -261,11 +261,11 @@ def _run(args) -> float:
                 exec_options=exec_options,
                 **storage_kwargs,
             )
-            db.save_case_from_solver_meta(
+            db.save_case_from_result(
                 example_name=example_name,
                 run_group=run_group,
                 case_key=case_key,
-                solver_meta=runner.last_meta,
+                result=runner.last_result,
                 meta={
                     "mode": "adaptive",
                     "error_tolerance": float(tolerance),

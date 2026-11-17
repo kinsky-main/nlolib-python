@@ -16,7 +16,7 @@ from backend.spectral import (  # noqa: E402
     omega_centroid_to_wavelength_nm,
     omega_detuning_to_wavelength_nm,
 )
-from high_order_grin_soliton_rk4ip import (  # noqa: E402
+from high_order_grin_soliton import (  # noqa: E402
     spectral_marginal_curve,
     temporal_frequency_axis,
 )

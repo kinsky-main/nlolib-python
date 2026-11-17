@@ -1,38 +1,70 @@
 """
-Execution layer for normalized propagation requests.
+Private execution of a normalized propagation request.
 """
 
 from __future__ import annotations
 
 import ctypes
 
+from . import _enums
 from ._binding import (
     PROPAGATE_OUTPUT_DENSE,
     PROPAGATE_OUTPUT_FINAL_ONLY,
-    VECTOR_BACKEND_AUTO,
     NLOLIB_STATUS_ABORTED,
     NLOLIB_STATUS_OK,
     NloComplex,
+    NloExecutionOptions,
     NloProgressCallback,
     NloPropagateOptions,
     NloPropagateOutput,
     NloStepEvent,
+    NloStorageOptions,
     NloStorageResult,
     complex_array_to_list,
-    default_storage_options,
     make_complex_array,
 )
-from ._config import (
-    _progress_info_from_struct,
-    _step_events_to_meta,
-    _storage_result_to_meta,
-    _validate_explicit_record_z,
+from ._config import _progress_info_from_struct, _step_history, _storage_result
+from ._models import (
+    ExecutionOptions,
+    NlolibError,
+    PropagationAbortedError,
+    PropagationResult,
+    StorageOptions,
 )
-from ._models import PropagationAbortedError, PropagationResult
 from ._requests import _NormalizedPropagateRequest
 
 
-_DENSE_OUTPUT_MAX_BYTES = 2 * 1024 * 1024 * 1024
+def _c_execution_options(options: ExecutionOptions | None) -> NloExecutionOptions | None:
+    """The C struct for `options`; the Vulkan handles stay null (library-owned)."""
+    if options is None:
+        return None
+    out = NloExecutionOptions()
+    out.backend_type = _enums.vector_backend(options.backend_type)
+    out.fft_backend = _enums.fft_backend(options.fft_backend)
+    out.device_heap_fraction = float(options.device_heap_fraction)
+    out.record_ring_target = int(options.record_ring_target)
+    out.forced_device_budget_bytes = int(options.forced_device_budget_bytes)
+    return out
+
+
+def _c_storage_options(storage: StorageOptions, keepalive: list[object]) -> NloStorageOptions:
+    out = NloStorageOptions()
+    path = str(storage.sqlite_path).encode("utf-8")
+    keepalive.append(path)
+    out.sqlite_path = ctypes.c_char_p(path)
+    if storage.run_id:
+        run_id = str(storage.run_id).encode("utf-8")
+        keepalive.append(run_id)
+        out.run_id = ctypes.c_char_p(run_id)
+    else:
+        out.run_id = None
+    out.sqlite_max_bytes = int(storage.sqlite_max_bytes)
+    out.chunk_records = int(storage.chunk_records)
+    out.cap_policy = _enums.cap_policy(storage.cap_policy)
+    out.log_final_output_field_to_db = int(bool(storage.log_final_output_field_to_db))
+    return out
+
+
 _COMPLEX_BYTES = ctypes.sizeof(NloComplex)
 
 
@@ -42,50 +74,30 @@ class PropagationExecutor:
         self._storage_is_available = storage_is_available
 
     def execute(self, request: _NormalizedPropagateRequest) -> PropagationResult:
-        if request.sqlite_path is not None and not self._storage_is_available():
-            raise RuntimeError("SQLite storage is not available in this nlolib build")
+        if request.storage is not None and not self._storage_is_available():
+            raise NlolibError("not_implemented", "SQLite storage is not available in this nlolib build")
 
         sim_ptr = ctypes.pointer(request.sim_cfg)
         phys_ptr = ctypes.pointer(request.phys_cfg)
         n = len(request.input_seq)
-        if request.return_records:
-            dense_output_bytes = n * request.num_records * _COMPLEX_BYTES
-            if dense_output_bytes > _DENSE_OUTPUT_MAX_BYTES:
-                if request.sqlite_path is not None:
-                    raise ValueError(
-                        "dense output request requires "
-                        f"{dense_output_bytes} bytes, above the {_DENSE_OUTPUT_MAX_BYTES} byte safety cap; "
-                        "use return_records=False with SQLite storage for large recorded outputs"
-                    )
-                raise ValueError(
-                    "dense output request requires "
-                    f"{dense_output_bytes} bytes, above the {_DENSE_OUTPUT_MAX_BYTES} byte safety cap; "
-                    "enable SQLite storage or request fewer records/samples"
-                )
+        # The in-memory record limit is the core's: the output buffer below is
+        # allocated zero-filled and lazily, and nlolib_propagate refuses a count
+        # above max_num_recorded_samples_in_memory before writing to it.
         in_arr = make_complex_array(request.input_seq)
         out_arr = make_complex_array(n * request.num_records) if request.return_records else None
-        explicit_record_z_arr = None
+        record_z_arr = None
         progress_callback_ref = None
         progress_callback_context = None
         progress_callback_error: list[BaseException | None] = [None]
 
-        storage_opts = None
-        storage_keepalive: list[bytes] = []
-        if request.sqlite_path is not None:
-            storage_opts, storage_keepalive = default_storage_options(
-                sqlite_path=request.sqlite_path,
-                run_id=request.run_id,
-                sqlite_max_bytes=request.sqlite_max_bytes,
-                chunk_records=request.chunk_records,
-                cap_policy=request.cap_policy,
-                log_final_output_field_to_db=request.log_final_output_field_to_db,
-            )
-        _ = storage_keepalive
-        if request.explicit_record_z is not None:
-            distance = float(request.sim_cfg.propagation.propagation_distance)
-            _validate_explicit_record_z(request.explicit_record_z, distance)
-            explicit_record_z_arr = (ctypes.c_double * len(request.explicit_record_z))(
-                *[float(v) for v in request.explicit_record_z]
+        keepalive: list[object] = []
+        exec_options = _c_execution_options(request.exec_options)
+        storage_opts = (
+            _c_storage_options(request.storage, keepalive) if request.storage is not None else None
+        )
+        if request.record_z is not None:
+            record_z_arr = (ctypes.c_double * len(request.record_z))(
+                *[float(v) for v in request.record_z]
             )
 
         propagate_options = (
@@ -96,14 +108,12 @@ class PropagationExecutor:
         propagate_options.num_recorded_samples = request.num_records
         propagate_options.output_mode = (
             PROPAGATE_OUTPUT_FINAL_ONLY
-            if request.num_records == 1
+            if request.num_records == 1 and request.record_z is None
             else PROPAGATE_OUTPUT_DENSE
         )
         propagate_options.return_records = int(bool(request.return_records))
         propagate_options.exec_options = (
-            ctypes.pointer(request.exec_options)
-            if request.exec_options is not None
-            else None
+            ctypes.pointer(exec_options) if exec_options is not None else None
         )
         propagate_options.storage_options = (
             ctypes.pointer(storage_opts)
@@ -111,14 +121,12 @@ class PropagationExecutor:
             else None
         )
         propagate_options.explicit_record_z = (
-            ctypes.cast(explicit_record_z_arr, ctypes.POINTER(ctypes.c_double))
-            if explicit_record_z_arr is not None
+            ctypes.cast(record_z_arr, ctypes.POINTER(ctypes.c_double))
+            if record_z_arr is not None
             else None
         )
         propagate_options.explicit_record_z_count = (
-            len(request.explicit_record_z)
-            if request.explicit_record_z is not None
-            else 0
+            len(request.record_z) if request.record_z is not None else 0
         )
         if request.progress_callback is not None:
             progress_callback_context = ctypes.py_object(request.progress_callback)
@@ -192,56 +200,52 @@ class PropagationExecutor:
             )
         )
         if status not in {NLOLIB_STATUS_OK, NLOLIB_STATUS_ABORTED}:
-            raise RuntimeError(f"nlolib_propagate failed with status={status}")
+            raise NlolibError(_enums.status_name(status), "nlolib_propagate failed")
 
         records_written_count = int(records_written.value)
         if out_arr is None:
             out_records: list[list[complex]] = []
         else:
             out_records = self._records_from_complex_array(out_arr, n, records_written_count)
-        storage_result_meta = (
-            _storage_result_to_meta(storage_result)
-            if request.sqlite_path is not None
-            else None
-        )
 
         distance = float(request.sim_cfg.propagation.propagation_distance)
-        if request.explicit_record_z is not None:
-            z_axis = [float(v) for v in request.explicit_record_z[:records_written_count]]
+        if request.record_z is not None and len(request.record_z) == 1:
+            # Core 9417e92 fills a single record with the final field whatever
+            # position was asked for; report the position actually returned.
+            z_axis = [distance] if records_written_count > 0 else []
+        elif request.record_z is not None:
+            z_axis = [float(v) for v in request.record_z[:records_written_count]]
         else:
             z_axis = self._build_z_axis(distance, records_written_count)
         final = list(out_records[-1]) if out_records else []
         meta: dict[str, object] = {
-            "output": request.output_label,
-            "records": request.num_records,
+            "preset": request.meta_overrides.get("preset"),
             "records_requested": request.num_records,
             "records_written": records_written_count,
-            "storage_enabled": bool(request.sqlite_path is not None),
-            "records_returned": bool(len(out_records) > 0),
             "backend_requested": (
-                int(request.exec_options.backend_type)
-                if request.exec_options is not None
-                else int(VECTOR_BACKEND_AUTO)
+                request.exec_options.backend_type if request.exec_options is not None else "auto"
             ),
-            "coupled": bool(
-                int(request.sim_cfg.spatial.nx) > 1 or int(request.sim_cfg.spatial.ny) > 1
-            ),
-            "status": int(status),
-            "message": (
-                "propagate aborted by progress callback"
-                if status == NLOLIB_STATUS_ABORTED
-                else "propagate completed"
-            ),
+            "coupled": bool(request.meta_overrides.get("coupled", False)),
+            "status": _enums.status_name(status),
         }
-        if storage_result_meta is not None:
-            meta["storage_result"] = storage_result_meta
-        if step_events_out is not None:
-            step_history = _step_events_to_meta(step_events_out, int(step_events_written.value))
-            step_history["dropped"] = int(step_events_dropped.value)
-            step_history["capacity"] = int(request.step_history_capacity)
-            meta["step_history"] = step_history
-        meta.update(request.meta_overrides)
-        result = PropagationResult(records=out_records, z_axis=z_axis, final=final, meta=meta)
+        step_history = (
+            _step_history(
+                step_events_out,
+                int(step_events_written.value),
+                int(step_events_dropped.value),
+                int(request.step_history_capacity),
+            )
+            if step_events_out is not None
+            else None
+        )
+        result = PropagationResult(
+            records=out_records,
+            z_axis=z_axis,
+            final=final,
+            step_history=step_history,
+            storage_result=_storage_result(storage_result) if request.storage is not None else None,
+            meta=meta,
+        )
         if progress_callback_error[0] is not None:
             raise progress_callback_error[0]
         if status == NLOLIB_STATUS_ABORTED:

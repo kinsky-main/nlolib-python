@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import sqlite3
@@ -271,12 +272,17 @@ class ExampleRunDB:
         sqlite_max_bytes: int = 0,
         log_final_output_field_to_db: bool = False,
     ) -> dict[str, Any]:
+        """``{"storage": StorageOptions(...)}`` for this case, to splat into propagate."""
+        import nlolib
+
         return {
-            "sqlite_path": str(self.db_path),
-            "run_id": self.make_run_id(example_name, run_group, case_key),
-            "chunk_records": int(chunk_records),
-            "sqlite_max_bytes": int(sqlite_max_bytes),
-            "log_final_output_field_to_db": bool(log_final_output_field_to_db),
+            "storage": nlolib.StorageOptions(
+                sqlite_path=str(self.db_path),
+                run_id=self.make_run_id(example_name, run_group, case_key),
+                chunk_records=int(chunk_records),
+                sqlite_max_bytes=int(sqlite_max_bytes),
+                log_final_output_field_to_db=bool(log_final_output_field_to_db),
+            )
         }
 
     @staticmethod
@@ -309,20 +315,20 @@ class ExampleRunDB:
                 (example_name, run_group, case_key, run_id, payload),
             )
 
-    def save_case_from_solver_meta(
+    def save_case_from_result(
         self,
         *,
         example_name: str,
         run_group: str,
         case_key: str,
-        solver_meta: dict[str, Any],
+        result: Any,
         meta: dict[str, Any] | None = None,
         save_step_history: bool = False,
     ) -> str:
-        storage_result = solver_meta.get("storage_result")
-        if not isinstance(storage_result, dict):
-            raise RuntimeError("solver meta does not contain storage_result.")
-        run_id = str(storage_result.get("run_id", "")).strip()
+        storage_result = getattr(result, "storage_result", None)
+        if storage_result is None:
+            raise RuntimeError("the propagation result has no storage_result; was storage given?")
+        run_id = str(storage_result.run_id).strip()
         if not run_id:
             raise RuntimeError("solver storage_result did not provide a run_id.")
         self._emit_db_progress(f"writing metadata for {case_key}", 0, 1)
@@ -334,7 +340,7 @@ class ExampleRunDB:
             meta=meta,
         )
         if save_step_history:
-            self.save_step_history(run_id=run_id, step_history=solver_meta.get("step_history"))
+            self.save_step_history(run_id=run_id, step_history=result.step_history)
         self._emit_db_progress(f"writing metadata for {case_key}", 1, 1)
         return run_id
 
@@ -421,8 +427,10 @@ class ExampleRunDB:
         return out
 
     def save_step_history(self, *, run_id: str, step_history: Any) -> None:
+        if step_history is None:
+            raise RuntimeError("step_history is missing; run with capture_step_history=True.")
         if not isinstance(step_history, dict):
-            raise RuntimeError("step_history metadata is missing or malformed.")
+            step_history = dataclasses.asdict(step_history)
 
         step_index_raw = step_history.get("step_index", [])
         z_raw = step_history.get("z", [])

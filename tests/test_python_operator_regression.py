@@ -3,18 +3,102 @@ import math
 import random
 import numpy as np
 
-from nlolib import (
-    NONLINEAR_MODEL_EXPR,
-    NONLINEAR_MODEL_KERR_RAMAN,
-    NLOLIB_LOG_LEVEL_ERROR,
-    NLOLIB_LOG_LEVEL_WARN,
-    VECTOR_BACKEND_AUTO,
-    VECTOR_BACKEND_CPU,
-    NLolib,
-    RuntimeOperators,
-    default_execution_options,
-    prepare_sim_config,
+import nlolib
+from nlolib import ExecutionOptions, StepHistory
+
+CPU = ExecutionOptions(backend_type="cpu")
+AUTO = ExecutionOptions(backend_type="auto")
+
+# The cases below describe a run as a config (grid and solver settings) plus
+# operators, then propagate it with a given field and record count. These two
+# helpers keep that shape and map it onto nlolib.propagate.
+_PULSE_FIELDS = (
+    "pulse_period", "delta_time", "frequency_grid", "tensor_nt", "tensor_nx",
+    "tensor_ny", "delta_x", "delta_y", "spatial_frequency_grid", "potential_grid",
+    "wt_axis", "kx_axis", "ky_axis",
 )
+_SOLVER_FIELDS = (
+    "propagation_distance", "starting_step_size", "max_step_size", "min_step_size",
+    "error_tolerance",
+)
+
+
+def _operators(*, constants=None, **operators):
+    """Operators and nonlinear-model settings for `_config`.
+
+    `constants` alone (no operators) selects the core's built-in default
+    operators, ``i*c0*w*w - c1`` and ``i*A*(c2*I + V)``, with those
+    coefficients: the reference several cases compare a callable against.
+    """
+    return {"constants": constants, **operators}
+
+
+def _config(num_time_samples, *, runtime=None, **settings):
+    unknown = set(settings) - set(_PULSE_FIELDS) - set(_SOLVER_FIELDS)
+    assert not unknown, unknown
+    return {"n": int(num_time_samples), "runtime": runtime or {}, "settings": settings}
+
+
+def _core_default_propagate(pulse, solver, constants, num_records, exec_options, **kwargs):
+    """Propagate with the core's default operators; not reachable through propagate."""
+    from nlolib import _api
+    from nlolib._config import _normalize_pulse_spec, _prepare_sim_config
+    from nlolib._executor import PropagationExecutor
+    from nlolib._requests import _NormalizedPropagateRequest
+
+    prepared = _prepare_sim_config(_normalize_pulse_spec(pulse), constants=list(constants), **solver)
+    capture = bool(kwargs.pop("capture_step_history", False))
+    capacity = int(kwargs.pop("step_history_capacity", 200000))
+    assert not kwargs, kwargs
+    request = _NormalizedPropagateRequest(
+        sim_cfg=prepared.simulation_config,
+        phys_cfg=prepared.physics_config,
+        keepalive=prepared.keepalive,
+        input_seq=list(pulse.samples),
+        num_records=int(num_records),
+        exec_options=exec_options,
+        storage=None,
+        return_records=True,
+        capture_step_history=capture,
+        step_history_capacity=capacity if capture else 0,
+        record_z=None,
+        progress_callback=None,
+        meta_overrides={"preset": None, "coupled": False},
+    )
+    return PropagationExecutor(_api._lib(), nlolib.storage_is_available).execute(request)
+
+
+class _Api:
+    """The module-level functions, plus propagate(config, field, records, options)."""
+
+    def __getattr__(self, name):
+        return getattr(nlolib, name)
+
+    @staticmethod
+    def propagate(config, field, num_records, exec_options=None, **kwargs):
+        settings = config["settings"]
+        pulse = nlolib.PulseSpec(
+            samples=list(field),
+            **{key: settings[key] for key in _PULSE_FIELDS if key in settings},
+        )
+        solver = {key: settings[key] for key in _SOLVER_FIELDS if key in settings}
+        runtime = dict(config["runtime"])
+        constants = runtime.pop("constants", None)
+        if "linear_operator" not in runtime and "nonlinear_operator" not in runtime:
+            assert constants is not None, "give operators or core-default constants"
+            return _core_default_propagate(pulse, solver, constants, num_records, exec_options, **kwargs)
+        runtime.setdefault("linear_operator", lambda A, w: 0.0)
+        runtime.setdefault("nonlinear_operator", lambda A, I: 0.0)
+        return nlolib.propagate(
+            pulse,
+            runtime.pop("linear_operator"),
+            runtime.pop("nonlinear_operator"),
+            num_records=int(num_records),
+            exec_options=exec_options,
+            **solver,
+            **runtime,
+            **kwargs,
+        )
 
 
 def _omega_grid_unshifted(n, dt):
@@ -254,19 +338,19 @@ def test_dispersion_factor_callable_matches_core_default(api, opts):
         frequency_grid=[complex(w, 0.0) for w in omega],
     )
 
-    reference_cfg = prepare_sim_config(
+    reference_cfg = _config(
         n,
-        runtime=RuntimeOperators(
+        runtime=_operators(
             constants=[scale, 0.0, 0.0],
         ),
         **common,
     )
 
     dispersion_factor_fn = lambda A, w: (1j * scale) * (w**2)  # noqa: E731
-    callable_cfg = prepare_sim_config(
+    callable_cfg = _config(
         n,
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=dispersion_factor_fn,
+        runtime=_operators(
+            linear_operator=dispersion_factor_fn,
             constants=[0.0, 0.0, 0.0],
         ),
         **common,
@@ -295,20 +379,20 @@ def test_nonlinear_callable_matches_core_default(api, opts):
         frequency_grid=[0j] * n,
     )
 
-    reference_cfg = prepare_sim_config(
+    reference_cfg = _config(
         n,
-        runtime=RuntimeOperators(
+        runtime=_operators(
             constants=[0.0, 0.0, gamma],
         ),
         **common,
     )
 
     nonlinear_fn = lambda A, I: (1j * gamma) * A * I  # noqa: E731
-    callable_cfg = prepare_sim_config(
+    callable_cfg = _config(
         n,
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=lambda A, w: 0.0,
-            nonlinear_fn=nonlinear_fn,
+        runtime=_operators(
+            linear_operator=lambda A, w: 0.0,
+            nonlinear_operator=nonlinear_fn,
         ),
         **common,
     )
@@ -338,20 +422,20 @@ def test_saturable_nonlinear_literal_one_matches_constant(api, opts):
     )
 
     one = 1.0
-    literal_cfg = prepare_sim_config(
+    literal_cfg = _config(
         n,
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=lambda A, w: 0.0,
-            nonlinear_fn=lambda A, I: 1j * A * (gamma * (I / (1.0 + I / saturation_intensity))),
+        runtime=_operators(
+            linear_operator=lambda A, w: 0.0,
+            nonlinear_operator=lambda A, I: 1j * A * (gamma * (I / (1.0 + I / saturation_intensity))),
         ),
         **common,
     )
 
-    constant_cfg = prepare_sim_config(
+    constant_cfg = _config(
         n,
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=lambda A, w: 0.0,
-            nonlinear_fn=lambda A, I: 1j * A * (gamma * (I / (one + I / saturation_intensity))),
+        runtime=_operators(
+            linear_operator=lambda A, w: 0.0,
+            nonlinear_operator=lambda A, I: 1j * A * (gamma * (I / (one + I / saturation_intensity))),
         ),
         **common,
     )
@@ -367,7 +451,7 @@ def test_nonlinear_legacy_multiplier_warns(api, opts):
     dt = 0.01
     input_field = _random_input_field(n, seed=29)
 
-    cfg = prepare_sim_config(
+    cfg = _config(
         n,
         propagation_distance=0.02,
         starting_step_size=1e-3,
@@ -377,14 +461,14 @@ def test_nonlinear_legacy_multiplier_warns(api, opts):
         pulse_period=float(n) * dt,
         delta_time=dt,
         frequency_grid=[0j] * n,
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=lambda A, w: 0.0,
-            nonlinear_fn=lambda A, I: 1j * 0.3 * I,
+        runtime=_operators(
+            linear_operator=lambda A, w: 0.0,
+            nonlinear_operator=lambda A, I: 1j * 0.3 * I,
         ),
     )
 
     api.set_log_buffer(64 * 1024)
-    api.set_log_level(1)
+    api.set_log_level("warn")
     api.clear_log_buffer()
     _ = api.propagate(cfg, input_field, 2, opts)
     log_text = api.read_log_buffer(consume=True)
@@ -396,46 +480,16 @@ def test_field_first_callable_signature_enforced():
     dt = 0.05
     omega = _omega_grid_unshifted(n, dt)
     try:
-        prepare_sim_config(
-            n,
+        nlolib.propagate(
+            nlolib.PulseSpec(samples=[0j] * n, delta_time=dt,
+                             frequency_grid=[complex(w, 0.0) for w in omega]),
+            lambda: 1.0,  # noqa: E731
+            lambda A, I: 0.0,
             propagation_distance=0.01,
-            starting_step_size=1e-3,
-            max_step_size=2e-3,
-            min_step_size=1e-5,
-            error_tolerance=1e-8,
-            pulse_period=float(n) * dt,
-            delta_time=dt,
-            frequency_grid=[complex(w, 0.0) for w in omega],
-            runtime=RuntimeOperators(dispersion_factor_fn=lambda: 1.0),  # noqa: E731
         )
         raise AssertionError("expected field-first callable signature check to fail")
     except ValueError as exc:
-        assert "dispersion_factor callable" in str(exc)
-
-
-def test_linear_dispersion_aliases_are_mutually_exclusive():
-    n = 64
-    dt = 0.05
-    omega = _omega_grid_unshifted(n, dt)
-    try:
-        prepare_sim_config(
-            n,
-            propagation_distance=0.01,
-            starting_step_size=1e-3,
-            max_step_size=2e-3,
-            min_step_size=1e-5,
-            error_tolerance=1e-8,
-            pulse_period=float(n) * dt,
-            delta_time=dt,
-            frequency_grid=[complex(w, 0.0) for w in omega],
-            runtime=RuntimeOperators(
-                linear_factor_fn=lambda A, wt: 1j * 0.1 * wt * wt,
-                dispersion_factor_fn=lambda A, w: 1j * 0.1 * w * w,
-            ),
-        )
-        raise AssertionError("expected linear/dispersive alias exclusivity check to fail")
-    except ValueError as exc:
-        assert "aliases; provide only one" in str(exc)
+        assert "dispersion_factor operator must take" in str(exc)
 
 
 def test_extended_runtime_operators_execute(api, opts):
@@ -444,7 +498,7 @@ def test_extended_runtime_operators_execute(api, opts):
     omega = _omega_grid_unshifted(n, dt)
     input_field = _random_input_field(n, seed=31)
 
-    cfg = prepare_sim_config(
+    cfg = _config(
         n,
         propagation_distance=0.03,
         starting_step_size=5e-4,
@@ -454,10 +508,10 @@ def test_extended_runtime_operators_execute(api, opts):
         pulse_period=float(n) * dt,
         delta_time=dt,
         frequency_grid=[complex(w, 0.0) for w in omega],
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=lambda A, w: 1j * 0.01 * (w**2) / (2.0 + 1.0),
-            dispersion_fn=lambda A, D, h: math.exp(h * D),
-            nonlinear_fn=lambda A, I: math.sin(A) + math.cos(A) + math.log(I + 1.0) + math.sqrt(I + 1.0),
+        runtime=_operators(
+            linear_operator=lambda A, w: 1j * 0.01 * (w**2) / (2.0 + 1.0),
+            linear_step_operator=lambda A, D, h: math.exp(h * D),
+            nonlinear_operator=lambda A, I: math.sin(A) + math.cos(A) + math.log(I + 1.0) + math.sqrt(I + 1.0),
         ),
     )
 
@@ -466,7 +520,7 @@ def test_extended_runtime_operators_execute(api, opts):
     assert len(records[0]) == n
 
 
-def test_tensor_linear_factor_alias_matches(api, opts):
+def test_tensor_linear_operator_positional_names_match(api, opts):
     nt = 4
     nx = 6
     ny = 4
@@ -489,21 +543,23 @@ def test_tensor_linear_factor_alias_matches(api, opts):
         potential_grid=[0j] * n,
     )
 
-    explicit_tensor_cfg = prepare_sim_config(
+    explicit_tensor_cfg = _config(
         n,
-        runtime=RuntimeOperators(
-            linear_factor_fn=lambda A, kx, ky: 1j * coef * (kx * kx + ky * ky),
-            linear_fn=lambda A, D, h: math.exp(h * D),
-            nonlinear_fn=lambda A, I: 0.0,
+        runtime=_operators(
+            linear_operator=lambda A, kx, ky: 1j * coef * (kx * kx + ky * ky),
+            linear_step_operator=lambda A, D, h: math.exp(h * D),
+            nonlinear_operator=lambda A, I: 0.0,
         ),
         **common,
     )
-    alias_cfg = prepare_sim_config(
+    # The same operator with parameters bound by order rather than by name:
+    # field -> A, omega -> wt (unused), then kx, ky.
+    alias_cfg = _config(
         n,
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=lambda A, kx, ky: 1j * coef * (kx * kx + ky * ky),
-            dispersion_fn=lambda A, D, h: math.exp(h * D),
-            nonlinear_fn=lambda A, I: 0.0,
+        runtime=_operators(
+            linear_operator=lambda field, omega, kx, ky: 1j * coef * (kx * kx + ky * ky),
+            linear_step_operator=lambda A, D, h: math.exp(h * D),
+            nonlinear_operator=lambda A, I: 0.0,
         ),
         **common,
     )
@@ -511,7 +567,7 @@ def test_tensor_linear_factor_alias_matches(api, opts):
     explicit_final = api.propagate(explicit_tensor_cfg, input_field, 2, opts).records[1]
     alias_final = api.propagate(alias_cfg, input_field, 2, opts).records[1]
     err = _max_abs_diff(explicit_final, alias_final)
-    assert err <= 2e-8, f"tensor linear factor alias mismatch: err={err}"
+    assert err <= 2e-8, f"tensor linear operator binding mismatch: err={err}"
 
 
 def test_beta_sum_power_matches_product(api, opts):
@@ -534,20 +590,20 @@ def test_beta_sum_power_matches_product(api, opts):
         frequency_grid=[complex(w, 0.0) for w in omega],
     )
 
-    reference_cfg = prepare_sim_config(
+    reference_cfg = _config(
         n,
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=lambda A, w: 1j * (beta2 * (w * w) + beta3 * (w * w * w) + beta4 * (w * w * w * w)),
+        runtime=_operators(
+            linear_operator=lambda A, w: 1j * (beta2 * (w * w) + beta3 * (w * w * w) + beta4 * (w * w * w * w)),
             constants=[0.0, 0.0, 0.0, 0.0],
         ),
         **common,
     )
 
     beta_sum_fn = lambda A, w: (1j * (beta2 * (w**2) + beta3 * (w**3) + beta4 * (w**4)))  # noqa: E731
-    callable_cfg = prepare_sim_config(
+    callable_cfg = _config(
         n,
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=beta_sum_fn,
+        runtime=_operators(
+            linear_operator=beta_sum_fn,
             constants=[0.0, 0.0, 0.0, 0.0],
         ),
         **common,
@@ -567,7 +623,7 @@ def test_tensor_diffraction_matches_fft_reference(api, opts):
     beta_t = -0.018
     input_field = _random_input_field(n, seed=101)
 
-    explicit_cfg = prepare_sim_config(
+    explicit_cfg = _config(
         n,
         propagation_distance=0.01,
         starting_step_size=1e-3,
@@ -580,13 +636,13 @@ def test_tensor_diffraction_matches_fft_reference(api, opts):
         tensor_nx=nx,
         tensor_ny=ny,
         frequency_grid=[0j] * nt,
-        runtime=RuntimeOperators(
-            linear_factor_fn=lambda A, kx, ky: 1j * beta_t * (kx * kx + ky * ky),
-            linear_fn=lambda A, D, h: math.exp(h * D),
-            nonlinear_fn=lambda A, I: 0.0,
+        runtime=_operators(
+            linear_operator=lambda A, kx, ky: 1j * beta_t * (kx * kx + ky * ky),
+            linear_step_operator=lambda A, D, h: math.exp(h * D),
+            nonlinear_operator=lambda A, I: 0.0,
         ),
     )
-    split_cfg = prepare_sim_config(
+    split_cfg = _config(
         n,
         propagation_distance=0.01,
         starting_step_size=1e-3,
@@ -599,10 +655,10 @@ def test_tensor_diffraction_matches_fft_reference(api, opts):
         tensor_nx=nx,
         tensor_ny=ny,
         frequency_grid=[0j] * nt,
-        runtime=RuntimeOperators(
-            linear_factor_fn=lambda A, kx, ky: 1j * (beta_t * kx * kx + beta_t * ky * ky),
-            linear_fn=lambda A, D, h: math.exp(h * D),
-            nonlinear_fn=lambda A, I: 0.0,
+        runtime=_operators(
+            linear_operator=lambda A, kx, ky: 1j * (beta_t * kx * kx + beta_t * ky * ky),
+            linear_step_operator=lambda A, D, h: math.exp(h * D),
+            nonlinear_operator=lambda A, I: 0.0,
         ),
     )
 
@@ -630,14 +686,14 @@ def test_tensor_wt_only_matches_transverse_tiling(api, opts):
         error_tolerance=1e-7,
         pulse_period=float(nt) * dt,
         delta_time=dt,
-        runtime=RuntimeOperators(
-            linear_factor_fn=lambda A, wt: 1j * (0.5 * beta2) * wt * wt,
-            linear_fn=lambda A, D, h: math.exp(h * D),
-            nonlinear_fn=lambda A, I: 0.0,
+        runtime=_operators(
+            linear_operator=lambda A, wt: 1j * (0.5 * beta2) * wt * wt,
+            linear_step_operator=lambda A, D, h: math.exp(h * D),
+            nonlinear_operator=lambda A, I: 0.0,
         ),
     )
 
-    ref_cfg = prepare_sim_config(
+    ref_cfg = _config(
         nt,
         tensor_nt=nt,
         tensor_nx=1,
@@ -652,7 +708,7 @@ def test_tensor_wt_only_matches_transverse_tiling(api, opts):
     for _ in range(nx * ny):
         tiled_input.extend(pulse)
 
-    tiled_cfg = prepare_sim_config(
+    tiled_cfg = _config(
         nt * nx * ny,
         tensor_nt=nt,
         tensor_nx=nx,
@@ -703,21 +759,21 @@ def test_raman_like_nonlinear_callable_forms_match(api, opts):
         potential_grid=potential,
     )
 
-    reference_cfg = prepare_sim_config(
+    reference_cfg = _config(
         n,
-        runtime=RuntimeOperators(
-            linear_factor_fn=lambda A, wt: 0.0,
-            linear_fn=lambda A, D, h: math.exp(h * D),
-            nonlinear_fn=lambda A, I, V: 1j * A * (gamma * I - gamma * f_r * I + gamma * f_r * V),
+        runtime=_operators(
+            linear_operator=lambda A, wt: 0.0,
+            linear_step_operator=lambda A, D, h: math.exp(h * D),
+            nonlinear_operator=lambda A, I, V: 1j * A * (gamma * I - gamma * f_r * I + gamma * f_r * V),
         ),
         **common,
     )
-    callable_cfg = prepare_sim_config(
+    callable_cfg = _config(
         n,
-        runtime=RuntimeOperators(
-            linear_factor_fn=lambda A, wt: 0.0,
-            linear_fn=lambda A, D, h: math.exp(h * D),
-            nonlinear_fn=lambda A, I, V: (1j * A) * (gamma * (1.0 - f_r) * I + gamma * f_r * V),  # noqa: E731
+        runtime=_operators(
+            linear_operator=lambda A, wt: 0.0,
+            linear_step_operator=lambda A, D, h: math.exp(h * D),
+            nonlinear_operator=lambda A, I, V: (1j * A) * (gamma * (1.0 - f_r) * I + gamma * f_r * V),  # noqa: E731
             constants=[0.0, 0.0, 0.0, 0.0],
         ),
         **common,
@@ -749,21 +805,21 @@ def test_kerr_raman_model_reduces_to_kerr_when_fraction_zero(api, opts):
         frequency_grid=[complex(w, 0.0) for w in omega],
     )
 
-    kerr_expr_cfg = prepare_sim_config(
+    kerr_expr_cfg = _config(
         n,
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=lambda A, w: 1j * (0.5 * beta2) * w * w,
-            nonlinear_fn=lambda A, I: 1j * gamma * A * I,
-            nonlinear_model=NONLINEAR_MODEL_EXPR,
+        runtime=_operators(
+            linear_operator=lambda A, w: 1j * (0.5 * beta2) * w * w,
+            nonlinear_operator=lambda A, I: 1j * gamma * A * I,
+            nonlinear_model="expr",
         ),
         **common,
     )
-    kerr_raman_cfg = prepare_sim_config(
+    kerr_raman_cfg = _config(
         n,
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=lambda A, w: 1j * (0.5 * beta2) * w * w,
-            nonlinear_fn=lambda A, I: 0.0,
-            nonlinear_model=NONLINEAR_MODEL_KERR_RAMAN,
+        runtime=_operators(
+            linear_operator=lambda A, w: 1j * (0.5 * beta2) * w * w,
+            nonlinear_operator=lambda A, I: 0.0,
+            nonlinear_model="kerr_raman",
             nonlinear_gamma=gamma,
             raman_fraction=0.0,
             shock_omega0=0.0,
@@ -801,12 +857,12 @@ def test_kerr_raman_custom_response_matches_generated_default(api, opts):
         frequency_grid=[complex(w, 0.0) for w in omega],
     )
 
-    generated_cfg = prepare_sim_config(
+    generated_cfg = _config(
         n,
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=lambda A, w: 1j * (0.5 * beta2) * w * w,
-            nonlinear_fn=lambda A, I: 0.0,
-            nonlinear_model=NONLINEAR_MODEL_KERR_RAMAN,
+        runtime=_operators(
+            linear_operator=lambda A, w: 1j * (0.5 * beta2) * w * w,
+            nonlinear_operator=lambda A, I: 0.0,
+            nonlinear_model="kerr_raman",
             nonlinear_gamma=gamma,
             raman_fraction=f_r,
             raman_tau1=tau1,
@@ -815,12 +871,12 @@ def test_kerr_raman_custom_response_matches_generated_default(api, opts):
         ),
         **common,
     )
-    custom_cfg = prepare_sim_config(
+    custom_cfg = _config(
         n,
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=lambda A, w: 1j * (0.5 * beta2) * w * w,
-            nonlinear_fn=lambda A, I: 0.0,
-            nonlinear_model=NONLINEAR_MODEL_KERR_RAMAN,
+        runtime=_operators(
+            linear_operator=lambda A, w: 1j * (0.5 * beta2) * w * w,
+            nonlinear_operator=lambda A, I: 0.0,
+            nonlinear_model="kerr_raman",
             nonlinear_gamma=gamma,
             raman_fraction=f_r,
             raman_tau1=tau1,
@@ -842,7 +898,7 @@ def test_kerr_raman_rejects_coupled_mode(api, opts):
     nx = 4
     ny = 2
     n = nt * nx * ny
-    cfg = prepare_sim_config(
+    cfg = _config(
         n,
         propagation_distance=0.02,
         starting_step_size=1e-3,
@@ -856,10 +912,10 @@ def test_kerr_raman_rejects_coupled_mode(api, opts):
         tensor_ny=ny,
         frequency_grid=[0j] * nt,
         potential_grid=[0j] * n,
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=lambda A, w: 0.0,
-            nonlinear_fn=lambda A, I: 0.0,
-            nonlinear_model=NONLINEAR_MODEL_KERR_RAMAN,
+        runtime=_operators(
+            linear_operator=lambda A, w: 0.0,
+            nonlinear_operator=lambda A, I: 0.0,
+            nonlinear_model="kerr_raman",
             nonlinear_gamma=0.8,
             raman_fraction=0.18,
             raman_tau1=0.0122,
@@ -872,9 +928,8 @@ def test_kerr_raman_rejects_coupled_mode(api, opts):
     try:
         api.propagate(cfg, field, 2, opts)
         raise AssertionError("expected coupled kerr_raman propagation to fail")
-    except RuntimeError as exc:
-        msg = str(exc)
-        assert ("status=1" in msg) or ("status=2" in msg)
+    except nlolib.NlolibError as exc:
+        assert exc.status in {"invalid_argument", "allocation_failed"}, exc.status
 
 
 def test_linear_drift_signed_prediction(api, opts):
@@ -888,7 +943,7 @@ def test_linear_drift_signed_prediction(api, opts):
     t = _centered_time_grid(n, dt)
     omega = _omega_grid_unshifted(n, dt)
 
-    cfg = prepare_sim_config(
+    cfg = _config(
         n,
         propagation_distance=z_final,
         starting_step_size=5e-3,
@@ -898,7 +953,7 @@ def test_linear_drift_signed_prediction(api, opts):
         pulse_period=float(n) * dt,
         delta_time=dt,
         frequency_grid=[complex(om, 0.0) for om in omega],
-        runtime=RuntimeOperators(constants=[0.5 * beta2, 0.0, 0.0]),
+        runtime=_operators(constants=[0.5 * beta2, 0.0, 0.0]),
     )
 
     pulse_pos = _gaussian_with_phase(t, sigma, d)
@@ -933,7 +988,7 @@ def test_adaptive_embedded_error_estimator_remains_stable(api, opts):
     omega = _omega_grid_unshifted(n, dt)
     a0 = [complex(math.exp(-((ti / 0.10) ** 2)), 0.0) for ti in t]
 
-    adaptive_cfg = prepare_sim_config(
+    adaptive_cfg = _config(
         n,
         propagation_distance=z_final,
         starting_step_size=1e-3,
@@ -943,9 +998,9 @@ def test_adaptive_embedded_error_estimator_remains_stable(api, opts):
         pulse_period=float(n) * dt,
         delta_time=dt,
         frequency_grid=[complex(om, 0.0) for om in omega],
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=lambda A, w: 0.0,
-            nonlinear_fn=lambda A, I: 1j * 6.0 * A * I,
+        runtime=_operators(
+            linear_operator=lambda A, w: 0.0,
+            nonlinear_operator=lambda A, I: 1j * 6.0 * A * I,
         ),
     )
     adaptive_result = api.propagate(
@@ -959,14 +1014,14 @@ def test_adaptive_embedded_error_estimator_remains_stable(api, opts):
     adaptive_final = adaptive_result.records[1]
     assert all(math.isfinite(v.real) and math.isfinite(v.imag) for v in adaptive_final)
 
-    step_history = adaptive_result.meta.get("step_history")
-    assert isinstance(step_history, dict)
-    step_sizes = [float(v) for v in step_history.get("step_size", [])]
-    errors = [float(v) for v in step_history.get("error", [])]
+    step_history = adaptive_result.step_history
+    assert isinstance(step_history, StepHistory)
+    step_sizes = [float(v) for v in step_history.step_size]
+    errors = [float(v) for v in step_history.error]
     assert len(step_sizes) > 0
     assert all(math.isfinite(v) and v >= 0.0 for v in errors)
 
-    reference_cfg = prepare_sim_config(
+    reference_cfg = _config(
         n,
         propagation_distance=z_final,
         starting_step_size=2.5e-4,
@@ -976,9 +1031,9 @@ def test_adaptive_embedded_error_estimator_remains_stable(api, opts):
         pulse_period=float(n) * dt,
         delta_time=dt,
         frequency_grid=[complex(om, 0.0) for om in omega],
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=lambda A, w: 0.0,
-            nonlinear_fn=lambda A, I: 1j * 6.0 * A * I,
+        runtime=_operators(
+            linear_operator=lambda A, w: 0.0,
+            nonlinear_operator=lambda A, I: 1j * 6.0 * A * I,
         ),
     )
     reference_final = api.propagate(reference_cfg, a0, 2, opts).records[1]
@@ -995,7 +1050,7 @@ def test_adaptive_relative_error_is_amplitude_scale_invariant(api, opts):
     base_field = [complex(math.exp(-((ti / 0.11) ** 2)), 0.0) for ti in t]
     scaled_field = [complex(1.0e3 * v.real, 1.0e3 * v.imag) for v in base_field]
 
-    cfg = prepare_sim_config(
+    cfg = _config(
         n,
         propagation_distance=z_final,
         starting_step_size=1e-3,
@@ -1005,9 +1060,9 @@ def test_adaptive_relative_error_is_amplitude_scale_invariant(api, opts):
         pulse_period=float(n) * dt,
         delta_time=dt,
         frequency_grid=[complex(om, 0.0) for om in omega],
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=lambda A, w: 0.0,
-            nonlinear_fn=lambda A, I: 1j * 12.0 * A,
+        runtime=_operators(
+            linear_operator=lambda A, w: 0.0,
+            nonlinear_operator=lambda A, I: 1j * 12.0 * A,
         ),
     )
 
@@ -1028,15 +1083,15 @@ def test_adaptive_relative_error_is_amplitude_scale_invariant(api, opts):
         step_history_capacity=4096,
     )
 
-    base_history = base_result.meta.get("step_history")
-    scaled_history = scaled_result.meta.get("step_history")
-    assert isinstance(base_history, dict)
-    assert isinstance(scaled_history, dict)
+    base_history = base_result.step_history
+    scaled_history = scaled_result.step_history
+    assert isinstance(base_history, StepHistory)
+    assert isinstance(scaled_history, StepHistory)
 
-    base_steps = [float(v) for v in base_history.get("step_size", [])]
-    scaled_steps = [float(v) for v in scaled_history.get("step_size", [])]
-    base_errors = [float(v) for v in base_history.get("error", [])]
-    scaled_errors = [float(v) for v in scaled_history.get("error", [])]
+    base_steps = [float(v) for v in base_history.step_size]
+    scaled_steps = [float(v) for v in scaled_history.step_size]
+    base_errors = [float(v) for v in base_history.error]
+    scaled_errors = [float(v) for v in scaled_history.error]
     assert len(base_steps) > 0
     assert len(base_errors) > 0
     assert len(scaled_steps) > 0
@@ -1075,15 +1130,15 @@ def test_adaptive_tighter_tolerance_reduces_final_error(api, opts):
         pulse_period=float(n) * dt,
         delta_time=dt,
         frequency_grid=[complex(om, 0.0) for om in omega],
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=lambda A, w: 0.0,
-            nonlinear_fn=lambda A, I: 1j * 6.0 * A * I,
+        runtime=_operators(
+            linear_operator=lambda A, w: 0.0,
+            nonlinear_operator=lambda A, I: 1j * 6.0 * A * I,
         ),
     )
 
-    loose_cfg = prepare_sim_config(n, error_tolerance=1e-5, **common)
-    tight_cfg = prepare_sim_config(n, error_tolerance=1e-7, **common)
-    reference_cfg = prepare_sim_config(
+    loose_cfg = _config(n, error_tolerance=1e-5, **common)
+    tight_cfg = _config(n, error_tolerance=1e-7, **common)
+    reference_cfg = _config(
         n,
         propagation_distance=z_final,
         starting_step_size=2.5e-4,
@@ -1093,9 +1148,9 @@ def test_adaptive_tighter_tolerance_reduces_final_error(api, opts):
         pulse_period=float(n) * dt,
         delta_time=dt,
         frequency_grid=[complex(om, 0.0) for om in omega],
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=lambda A, w: 0.0,
-            nonlinear_fn=lambda A, I: 1j * 6.0 * A * I,
+        runtime=_operators(
+            linear_operator=lambda A, w: 0.0,
+            nonlinear_operator=lambda A, I: 1j * 6.0 * A * I,
         ),
     )
 
@@ -1125,12 +1180,12 @@ def test_adaptive_tighter_tolerance_reduces_final_error(api, opts):
         f"tight tolerance should not worsen final error: loose={loose_rel_err}, tight={tight_rel_err}"
     )
 
-    loose_history = loose_result.meta.get("step_history")
-    tight_history = tight_result.meta.get("step_history")
-    assert isinstance(loose_history, dict)
-    assert isinstance(tight_history, dict)
-    loose_steps = [float(v) for v in loose_history.get("step_size", [])]
-    tight_steps = [float(v) for v in tight_history.get("step_size", [])]
+    loose_history = loose_result.step_history
+    tight_history = tight_result.step_history
+    assert isinstance(loose_history, StepHistory)
+    assert isinstance(tight_history, StepHistory)
+    loose_steps = [float(v) for v in loose_history.step_size]
+    tight_steps = [float(v) for v in tight_history.step_size]
     assert len(loose_steps) > 0
     assert len(tight_steps) > 0
     assert len(tight_steps) >= len(loose_steps), (
@@ -1149,7 +1204,7 @@ def test_adaptive_min_step_out_of_tolerance_emits_warning(api, opts):
     a0 = [complex(math.exp(-((ti / 0.09) ** 2)), 0.0) for ti in t]
     tol = 1e-30
 
-    cfg = prepare_sim_config(
+    cfg = _config(
         n,
         propagation_distance=z_final,
         starting_step_size=1e-3,
@@ -1159,13 +1214,13 @@ def test_adaptive_min_step_out_of_tolerance_emits_warning(api, opts):
         pulse_period=float(n) * dt,
         delta_time=dt,
         frequency_grid=[complex(om, 0.0) for om in omega],
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=lambda A, w: 0.0,
-            nonlinear_fn=lambda A, I: 1j * 20.0 * A * I,
+        runtime=_operators(
+            linear_operator=lambda A, w: 0.0,
+            nonlinear_operator=lambda A, I: 1j * 20.0 * A * I,
         ),
     )
 
-    api.set_log_level(NLOLIB_LOG_LEVEL_WARN)
+    api.set_log_level("warn")
     api.set_log_buffer(256 * 1024)
     api.clear_log_buffer()
     result = api.propagate(
@@ -1178,10 +1233,10 @@ def test_adaptive_min_step_out_of_tolerance_emits_warning(api, opts):
     )
     logs = api.read_log_buffer(consume=True, max_bytes=256 * 1024)
 
-    history = result.meta.get("step_history")
-    assert isinstance(history, dict)
-    step_sizes = [float(v) for v in history.get("step_size", [])]
-    errors = [float(v) for v in history.get("error", [])]
+    history = result.step_history
+    assert isinstance(history, StepHistory)
+    step_sizes = [float(v) for v in history.step_size]
+    errors = [float(v) for v in history.error]
     assert len(step_sizes) > 0
     assert len(errors) > 0
 
@@ -1194,7 +1249,7 @@ def test_adaptive_min_step_out_of_tolerance_emits_warning(api, opts):
 def test_second_order_soliton_intensity_error(api, opts):
     case = _second_order_soliton_case(n=224, window_multiple_t0=16.0)
 
-    cfg = prepare_sim_config(
+    cfg = _config(
         224,
         propagation_distance=case["z_final"],
         starting_step_size=2e-4,
@@ -1204,7 +1259,7 @@ def test_second_order_soliton_intensity_error(api, opts):
         pulse_period=224.0 * case["dt"],
         delta_time=case["dt"],
         frequency_grid=[complex(om, 0.0) for om in case["omega"]],
-        runtime=RuntimeOperators(constants=[0.5 * case["beta2"], 0.0, case["gamma"]]),
+        runtime=_operators(constants=[0.5 * case["beta2"], 0.0, case["gamma"]]),
     )
 
     records = api.propagate(cfg, case["a0"], 2, opts).records
@@ -1221,10 +1276,10 @@ def test_second_order_soliton_adaptive_vs_fixed_reference_auto_gpu(api, opts):
         return
 
     case = _second_order_soliton_case(n=1024, window_multiple_t0=40.0)
-    runtime = RuntimeOperators(constants=[0.5 * case["beta2"], 0.0, case["gamma"]])
-    gpu_opts = default_execution_options(VECTOR_BACKEND_AUTO)
+    runtime = _operators(constants=[0.5 * case["beta2"], 0.0, case["gamma"]])
+    gpu_opts = AUTO
 
-    adaptive_cfg = prepare_sim_config(
+    adaptive_cfg = _config(
         1024,
         propagation_distance=case["z_final"],
         starting_step_size=1e-4,
@@ -1236,7 +1291,7 @@ def test_second_order_soliton_adaptive_vs_fixed_reference_auto_gpu(api, opts):
         frequency_grid=[complex(om, 0.0) for om in case["omega"]],
         runtime=runtime,
     )
-    fixed_cfg = prepare_sim_config(
+    fixed_cfg = _config(
         1024,
         propagation_distance=case["z_final"],
         starting_step_size=case["z_final"] / 1024.0,
@@ -1249,7 +1304,7 @@ def test_second_order_soliton_adaptive_vs_fixed_reference_auto_gpu(api, opts):
         runtime=runtime,
     )
 
-    api.set_log_level(NLOLIB_LOG_LEVEL_ERROR)
+    api.set_log_level("error")
     try:
         adaptive_result = api.propagate(
             adaptive_cfg,
@@ -1261,16 +1316,16 @@ def test_second_order_soliton_adaptive_vs_fixed_reference_auto_gpu(api, opts):
         )
         fixed_result = api.propagate(fixed_cfg, case["a0"], 2, gpu_opts)
     finally:
-        api.set_log_level(NLOLIB_LOG_LEVEL_WARN)
+        api.set_log_level("warn")
 
     adaptive_final = adaptive_result.records[1]
     fixed_final = fixed_result.records[1]
     adaptive_error = _second_order_intensity_error(adaptive_final, case["p0"], case["u_true"])
     fixed_error = _second_order_intensity_error(fixed_final, case["p0"], case["u_true"])
 
-    adaptive_history = adaptive_result.meta.get("step_history")
-    assert isinstance(adaptive_history, dict)
-    adaptive_steps = [float(v) for v in adaptive_history.get("step_size", [])]
+    adaptive_history = adaptive_result.step_history
+    assert isinstance(adaptive_history, StepHistory)
+    adaptive_steps = [float(v) for v in adaptive_history.step_size]
     assert len(adaptive_steps) > 0
     assert all(math.isfinite(v) and v > 0.0 for v in adaptive_steps)
     assert math.isfinite(adaptive_error)
@@ -1305,7 +1360,7 @@ def test_fixed_step_linear_only_exact_cpu_vs_auto_gpu(api, opts):
     cpu_errors = []
     for step_count in step_counts:
         step = z_final / float(step_count)
-        cfg = prepare_sim_config(
+        cfg = _config(
             n,
             propagation_distance=z_final,
             starting_step_size=step,
@@ -1315,9 +1370,9 @@ def test_fixed_step_linear_only_exact_cpu_vs_auto_gpu(api, opts):
             pulse_period=float(n) * dt,
             delta_time=dt,
             frequency_grid=[complex(om, 0.0) for om in omega],
-            runtime=RuntimeOperators(constants=[c0, c1, 0.0]),
+            runtime=_operators(constants=[c0, c1, 0.0]),
         )
-        cpu_final = api.propagate(cfg, a0, 2, default_execution_options(VECTOR_BACKEND_CPU)).records[1]
+        cpu_final = api.propagate(cfg, a0, 2, CPU).records[1]
         cpu_errors.append(_relative_l2_error(cpu_final, exact))
 
     assert max(cpu_errors) <= 5e-12, f"CPU linear-only fixed-step propagation drifted from exact solution: {cpu_errors}"
@@ -1329,7 +1384,7 @@ def test_fixed_step_linear_only_exact_cpu_vs_auto_gpu(api, opts):
     gpu_errors = []
     for step_count in step_counts:
         step = z_final / float(step_count)
-        cfg = prepare_sim_config(
+        cfg = _config(
             n,
             propagation_distance=z_final,
             starting_step_size=step,
@@ -1339,9 +1394,9 @@ def test_fixed_step_linear_only_exact_cpu_vs_auto_gpu(api, opts):
             pulse_period=float(n) * dt,
             delta_time=dt,
             frequency_grid=[complex(om, 0.0) for om in omega],
-            runtime=RuntimeOperators(constants=[c0, c1, 0.0]),
+            runtime=_operators(constants=[c0, c1, 0.0]),
         )
-        auto_final = api.propagate(cfg, a0, 2, default_execution_options(VECTOR_BACKEND_AUTO)).records[1]
+        auto_final = api.propagate(cfg, a0, 2, AUTO).records[1]
         gpu_errors.append(_relative_l2_error(auto_final, exact))
 
     assert max(gpu_errors) <= 5e-6, f"AUTO/Vulkan linear-only fixed-step error exceeded diagnostic bound: {gpu_errors}"
@@ -1364,7 +1419,7 @@ def test_fixed_step_nonlinear_only_order_auto_gpu(api, opts):
 
     for step_count in step_counts:
         step = z_final / float(step_count)
-        cfg = prepare_sim_config(
+        cfg = _config(
             n,
             propagation_distance=z_final,
             starting_step_size=step,
@@ -1374,12 +1429,12 @@ def test_fixed_step_nonlinear_only_order_auto_gpu(api, opts):
             pulse_period=float(n) * dt,
             delta_time=dt,
             frequency_grid=[complex(0.0, 0.0) for _ in range(n)],
-            runtime=RuntimeOperators(
-                dispersion_factor_fn=lambda A, w: 0.0,
-                nonlinear_fn=lambda A, I: 1j * gamma * A * I,
+            runtime=_operators(
+                linear_operator=lambda A, w: 0.0,
+                nonlinear_operator=lambda A, I: 1j * gamma * A * I,
             ),
         )
-        final_field = api.propagate(cfg, a0, 2, default_execution_options(VECTOR_BACKEND_AUTO)).records[1]
+        final_field = api.propagate(cfg, a0, 2, AUTO).records[1]
         _assert_gpu_result_not_degenerate(
             final_field,
             exact,
@@ -1416,21 +1471,21 @@ def test_callable_mode_ignores_raman_parameters(api, opts):
         delta_time=dt,
         frequency_grid=[complex(om, 0.0) for om in omega],
     )
-    expr_cfg = prepare_sim_config(
+    expr_cfg = _config(
         n,
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=lambda A, w: 1j * 0.01 * w * w,
-            nonlinear_fn=lambda A, I: 1j * 0.7 * A * I,
-            nonlinear_model=NONLINEAR_MODEL_EXPR,
+        runtime=_operators(
+            linear_operator=lambda A, w: 1j * 0.01 * w * w,
+            nonlinear_operator=lambda A, I: 1j * 0.7 * A * I,
+            nonlinear_model="expr",
         ),
         **common,
     )
-    expr_with_raman_params_cfg = prepare_sim_config(
+    expr_with_raman_params_cfg = _config(
         n,
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=lambda A, w: 1j * 0.01 * w * w,
-            nonlinear_fn=lambda A, I: 1j * 0.7 * A * I,
-            nonlinear_model=NONLINEAR_MODEL_EXPR,
+        runtime=_operators(
+            linear_operator=lambda A, w: 1j * 0.01 * w * w,
+            nonlinear_operator=lambda A, I: 1j * 0.7 * A * I,
+            nonlinear_model="expr",
             nonlinear_gamma=123.0,
             raman_fraction=0.35,
             raman_tau1=0.02,
@@ -1474,7 +1529,7 @@ def _fixed_step_fundamental_soliton_order_stats(api, opts):
     errors = []
     for step_count in step_counts:
         dz = z_final / float(step_count)
-        cfg = prepare_sim_config(
+        cfg = _config(
             n,
             propagation_distance=z_final,
             starting_step_size=dz,
@@ -1484,7 +1539,7 @@ def _fixed_step_fundamental_soliton_order_stats(api, opts):
             pulse_period=float(n) * dt,
             delta_time=dt,
             frequency_grid=[complex(om, 0.0) for om in omega],
-            runtime=RuntimeOperators(constants=[0.5 * beta2, 0.0, gamma]),
+            runtime=_operators(constants=[0.5 * beta2, 0.0, gamma]),
         )
         records = api.propagate(cfg, a0, 2, opts).records
         final_field = records[1]
@@ -1504,7 +1559,7 @@ def _fixed_step_fundamental_soliton_order_stats(api, opts):
 
 def _auto_backend_resolves_to_vulkan(api):
     n = 32
-    cfg = prepare_sim_config(
+    cfg = _config(
         n,
         propagation_distance=0.0,
         starting_step_size=0.01,
@@ -1514,12 +1569,12 @@ def _auto_backend_resolves_to_vulkan(api):
         pulse_period=1.0,
         delta_time=1.0 / float(n),
         frequency_grid=[0j] * n,
-        runtime=RuntimeOperators(constants=[0.0, 0.0, 0.0]),
+        runtime=_operators(constants=[0.0, 0.0, 0.0]),
     )
-    api.set_log_level(2)
+    api.set_log_level("info")
     api.set_log_buffer(64 * 1024)
     api.clear_log_buffer()
-    api.propagate(cfg, [0j] * n, 1, default_execution_options(VECTOR_BACKEND_AUTO))
+    api.propagate(cfg, [0j] * n, 1, AUTO)
     logs = api.read_log_buffer(consume=True, max_bytes=64 * 1024)
     return "actual: VULKAN" in logs
 
@@ -1531,11 +1586,11 @@ def test_fixed_step_fundamental_soliton_order_auto_gpu(api, opts):
 
     cpu_slope, cpu_errors = _fixed_step_fundamental_soliton_order_stats(
         api,
-        default_execution_options(VECTOR_BACKEND_CPU),
+        CPU,
     )
     auto_slope, auto_errors = _fixed_step_fundamental_soliton_order_stats(
         api,
-        default_execution_options(VECTOR_BACKEND_AUTO),
+        AUTO,
     )
     assert auto_slope >= 3.0, f"fixed-step AUTO/Vulkan soliton slope unexpectedly low: {auto_slope}"
     assert abs(auto_slope - cpu_slope) <= 0.2, (
@@ -1545,16 +1600,15 @@ def test_fixed_step_fundamental_soliton_order_auto_gpu(api, opts):
 
 
 def main():
-    api = NLolib()
-    opts = default_execution_options(VECTOR_BACKEND_CPU)
+    api = _Api()
+    opts = CPU
     test_dispersion_factor_callable_matches_core_default(api, opts)
     test_nonlinear_callable_matches_core_default(api, opts)
     test_saturable_nonlinear_literal_one_matches_constant(api, opts)
     test_nonlinear_legacy_multiplier_warns(api, opts)
     test_field_first_callable_signature_enforced()
-    test_linear_dispersion_aliases_are_mutually_exclusive()
     test_extended_runtime_operators_execute(api, opts)
-    test_tensor_linear_factor_alias_matches(api, opts)
+    test_tensor_linear_operator_positional_names_match(api, opts)
     test_beta_sum_power_matches_product(api, opts)
     test_tensor_diffraction_matches_fft_reference(api, opts)
     test_tensor_wt_only_matches_transverse_tiling(api, opts)

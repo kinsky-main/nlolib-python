@@ -216,30 +216,27 @@ def _build_case(runner: NloExampleRunner, case: TensorCase):
     omega = 2.0 * np.pi * np.fft.fftfreq(case.nt, d=dt)
     field0 = _flatten_tfast(_gaussian_tensor_field(t_axis, x_axis, y_axis))
     beta_t, beta_x, gamma = 0.04, -0.20, 0.015
-    runtime = nlo.RuntimeOperators(
-        linear_factor_fn=lambda A, wt, kx, ky: 1j * (beta_t * wt * wt + beta_x * (kx * kx + ky * ky)),
-        linear_fn=lambda A, D, h: np.exp(h * D),
-        nonlinear_fn=lambda A, I: 1j * A * (gamma * I),
-    )
-    config = nlo.prepare_sim_config(
-        case.total_points,
+    return dict(
+        pulse=nlo.PulseSpec(
+            samples=field0.tolist(),
+            delta_time=dt,
+            pulse_period=float(case.nt) * dt,
+            frequency_grid=[complex(value, 0.0) for value in omega],
+            tensor_nt=case.nt,
+            tensor_nx=case.nx,
+            tensor_ny=case.ny,
+            delta_x=dx,
+            delta_y=dy,
+        ),
+        linear_operator=lambda A, wt, kx, ky: 1j * (beta_t * wt * wt + beta_x * (kx * kx + ky * ky)),
+        nonlinear_operator=lambda A, I: 1j * A * (gamma * I),
+        linear_step_operator=lambda A, D, h: np.exp(h * D),
         propagation_distance=0.20,
         starting_step_size=0.0001,
         max_step_size=0.02,
         min_step_size=0.000001,
         error_tolerance=1.0e-9,
-        pulse_period=float(case.nt) * dt,
-        delta_time=dt,
-        tensor_nt=case.nt,
-        tensor_nx=case.nx,
-        tensor_ny=case.ny,
-        tensor_layout=nlo.TENSOR_LAYOUT_XYT_T_FAST,
-        frequency_grid=[complex(value, 0.0) for value in omega],
-        delta_x=dx,
-        delta_y=dy,
-        runtime=runtime,
     )
-    return config, field0
 
 
 def _mean_std(values: list[float]) -> tuple[float | None, float | None]:
@@ -265,18 +262,18 @@ def _benchmark_nlolib_case(
     num_records: int,
     warmup: int,
     runs: int,
-    backend_type: int,
+    backend_type: str,
     backend_label: str,
 ) -> BenchmarkRow:
     nlo = runner.nlo
-    config, field0 = _build_case(runner, case)
-    exec_options = nlo.default_execution_options(backend_type)
+    case_kwargs = _build_case(runner, case)
+    exec_options = nlo.ExecutionOptions(backend_type=backend_type)
     samples: list[float] = []
 
     try:
         for run_idx in range(int(warmup) + int(runs)):
             start = time.perf_counter()
-            api.propagate(config, field0, int(num_records), exec_options=exec_options)
+            api.propagate(**case_kwargs, num_records=int(num_records), exec_options=exec_options)
             runtime_seconds = time.perf_counter() - start
             if run_idx < int(warmup):
                 continue
@@ -987,16 +984,13 @@ def _benchmark_nlolib_rows(
     series: Sequence[RuntimePlotSeries] = _NLOLIB_RUNTIME_PLOT_SPEC.series,
     run_cpu: bool = True,
 ) -> list[BenchmarkRow]:
-    backend_type_by_label = {
-        "CPU": runner.nlo.VECTOR_BACKEND_CPU,
-        "GPU": runner.nlo.VECTOR_BACKEND_VULKAN,
-    }
+    backend_type_by_label = {"CPU": "cpu", "GPU": "vulkan"}
     rows: list[BenchmarkRow] = []
     for plot_series in series:
         backend_type = backend_type_by_label.get(plot_series.backend.upper())
         if backend_type is None or plot_series.solver.lower() != "nlolib":
             continue
-        if backend_type == runner.nlo.VECTOR_BACKEND_CPU and not run_cpu:
+        if backend_type == "cpu" and not run_cpu:
             continue
         rows.extend(
             _benchmark_nlolib_case(
@@ -1092,7 +1086,7 @@ def _run(args: argparse.Namespace) -> float:
     else:
         run_group = db.begin_group(example_name, args.run_group)
         runner = NloExampleRunner()
-        api = runner.nlo.NLolib()
+        api = runner.nlo
 
         mmtools_summary_csv = args.mmtools_summary_csv
         if mmtools_summary_csv is None and _DEFAULT_MMTOOLS_SUMMARY_CSV.is_file():

@@ -36,7 +36,7 @@ result = nlolib.propagate(
     lambda A, w: 1j * 0.5 * beta2 * w * w,  # linear operator D(w)
     lambda A, I: 1j * gamma * A * I,        # nonlinear operator N(A), I = |A|^2
     propagation_distance=2.0,
-    records=3,
+    num_records=3,
 )
 print(result.z_axis)                      # [0.0, 1.0, 2.0]
 print(max(abs(a) for a in result.final))  # ~1.0
@@ -45,10 +45,15 @@ print(max(abs(a) for a in result.final))  # ~1.0
 `result.records[k]` is the field at `result.z_axis[k]`. Each operator is a
 `lambda` or `def` whose body is a single expression. Its parameters name the
 symbols it uses: `A` field, `w` angular frequency, `I` intensity `|A|^2`, `V`
-potential, and `wt`/`kx`/`ky` for tensor runs. Free names are captured from the
-enclosing scope, or bound explicitly with
-`nlolib.OperatorSpec(fn=..., params={"beta2": -1.0})`. Expression strings are
-not accepted; passing one raises `TypeError`.
+potential, and `kx`/`ky` for tensor runs. Free names are captured from the
+enclosing scope; `constant_bindings={"beta2": -1.0}` names values explicitly.
+Expression strings are not accepted; passing one raises `TypeError`.
+
+Options are keyword arguments: solver settings (`preset`, `error_tolerance`,
+step sizes), records (`num_records`, or `record_z` for exact positions), the
+backend (`exec_options=nlolib.ExecutionOptions(backend_type="cpu")`) and SQLite
+storage (`storage=nlolib.StorageOptions(sqlite_path="run.sqlite")`). Every
+enum-style value is a lowercase string.
 
 ## CPU and GPU
 
@@ -68,10 +73,14 @@ not accepted; passing one raises `TypeError`.
 ## Examples
 
 The [`examples/`](https://github.com/kinsky-main/nlolib-python/tree/main/examples)
-directory of the source repository holds runnable scripts: soliton and
-self-phase-modulation validation, Raman scattering, GRIN-fibre propagation,
-runtime-callable operators, and SQLite snapshot storage. They need the extra
-packages in `examples/requirements.txt`.
+directory of the source repository holds the example set shared with the
+MATLAB and Julia bindings -- `quickstart`, `linear_drift`, `spm`,
+`second_order_soliton`, `conservation_checks`, `raman_scattering`,
+`tensor_dispersion_3d`, `transverse_grin_beam`, `spatiotemporal_kerr_bullet`,
+`grin_soliton_fission`, `high_order_grin_soliton` and `sqlite_storage` -- each
+with its numbers in one parameter block at the top. `tensor_backend_scaling*`,
+`fixed_step_soliton_convergence` and `two_mode_linear_beating` are on-demand
+extras. They need the extra packages in `examples/requirements.txt`.
 
 ## Links
 

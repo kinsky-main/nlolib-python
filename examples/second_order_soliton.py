@@ -10,6 +10,7 @@ using t = T / T0 and A(z, t) = sqrt(P0) * exp(-alpha * z / 2) * U(z, t).
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import math
 import sys
 from dataclasses import dataclass
@@ -41,6 +42,7 @@ from backend.spectral import (
 )
 from backend.storage import ExampleRunDB
 from backend.metrics import (
+    report_metric,
     relative_l2_intensity_error,
     relative_l2_intensity_error_curve,
 )
@@ -54,6 +56,22 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PYTHON_API_DIR = REPO_ROOT
 if str(PYTHON_API_DIR) not in sys.path:
     sys.path.insert(0, str(PYTHON_API_DIR))
+
+# nlolib-example-parameters: begin
+n = 4096
+tfwhm = 0.1
+beta2 = -0.01
+gamma = 0.01
+soliton_order = 2
+num_records = 160
+starting_step_size = 0.0001
+max_step_size = 0.01
+min_step_size = 1e-09
+error_tolerance = 1e-10
+# nlolib-example-parameters: end
+# Derived: t0 = tfwhm / (2 acosh(sqrt(2))), dt = 40 t0 / n,
+# z_final = (pi / 2) t0^2 / |beta2|.
+
 
 @dataclass(frozen=True)
 class StepTelemetry:
@@ -161,6 +179,8 @@ def step_telemetry_from_meta(meta: dict[str, object] | None) -> StepTelemetry:
     if not meta:
         return StepTelemetry.empty()
     raw = meta.get("step_history")
+    if raw is not None and not isinstance(raw, dict):
+        raw = dataclasses.asdict(raw)
     if not isinstance(raw, dict):
         return StepTelemetry.empty()
 
@@ -412,7 +432,7 @@ def make_eta_abort_progress_callback(
     def _callback(info) -> int:
         nonlocal prompted, warned_noninteractive
 
-        if int(info.event_type) == int(module.PROGRESS_EVENT_FINISH):
+        if info.event_type == "finish":
             return 1
         if prompted:
             return 1
@@ -437,9 +457,18 @@ def make_eta_abort_progress_callback(
     return _callback
 
 
+def _derived() -> tuple[float, float, float, float]:
+    """t0, p0, z_final and dt from the parameter block."""
+    t0 = tfwhm / (2.0 * math.acosh(math.sqrt(2.0)))
+    p0 = abs(beta2) / (gamma * t0 * t0)
+    z_final = 0.5 * math.pi * (t0 * t0) / abs(beta2)
+    dt = (40.0 * t0) / n
+    return t0, p0, z_final, dt
+
+
 def _run(args: argparse.Namespace) -> float:
     db = ExampleRunDB(args.db_path)
-    example_name = "second_order_soliton_rk4ip"
+    example_name = "second_order_soliton"
     case_key = "default"
     configured_start_step: float | None = None
     configured_max_step: float | None = None
@@ -450,14 +479,8 @@ def _run(args: argparse.Namespace) -> float:
         run_group = db.resolve_replot_group(example_name, args.run_group)
         loaded = db.load_case(example_name=example_name, run_group=run_group, case_key=case_key)
         meta = loaded.meta
-        beta2 = float(meta["beta2"])
-        gamma = float(meta["gamma"])
-        alpha = float(meta["alpha"])
-        t0 = float(meta["t0"])
-        p0 = float(meta["p0"])
-        n = int(meta["n"])
-        dt = float(meta["dt"])
-        z_final = float(meta["z_final"])
+        alpha = 0.0
+        t0, p0, z_final, dt = _derived()
         T = centered_time_grid(n, dt)
         t = to_dimensionless_time(T, t0)
         z_records = np.asarray(loaded.z_axis, dtype=np.float64)
@@ -478,24 +501,15 @@ def _run(args: argparse.Namespace) -> float:
         telemetry = step_telemetry_from_meta({"step_history": step_history})
     else:
         run_group = db.begin_group(example_name, args.run_group)
-        beta2 = -0.01
-        gamma = 0.01
         alpha = 0.0
-        tfwhm = 100e-3
-        t0 = tfwhm / (2.0 * math.log(1.0 + math.sqrt(2.0)))
-        p0 = abs(beta2) / (gamma * t0 * t0)
-        ld_tmp = (t0 * t0) / abs(beta2)
-        z_final = 0.5 * math.pi * ld_tmp
-
-        n = 2**12
-        dt = (40.0 * t0) / n
+        t0, p0, z_final, dt = _derived()
         T = centered_time_grid(n, dt)
         t = to_dimensionless_time(T, t0)
         omega = 2.0 * math.pi * np.fft.fftfreq(n, d=dt)
-        U0 = 2.0 * sech(t)
+        U0 = float(soliton_order) * sech(t)
         A0 = to_physical_envelope(U0, 0.0, p0, alpha)
 
-        num_recorded_samples = 160
+        num_recorded_samples = num_records
         sim_cfg = TemporalSimulationConfig(
             gamma=gamma,
             beta2=beta2,
@@ -505,10 +519,10 @@ def _run(args: argparse.Namespace) -> float:
             num_time_samples=n,
             pulse_period=n * dt,
             omega=omega,
-            starting_step_size=1e-4,
-            max_step_size=0.01,
-            min_step_size=1e-9,
-            error_tolerance=1e-10,
+            starting_step_size=starting_step_size,
+            max_step_size=max_step_size,
+            min_step_size=min_step_size,
+            error_tolerance=error_tolerance,
             honor_solver_controls=True,
         )
         configured_start_step = float(sim_cfg.starting_step_size)
@@ -540,15 +554,15 @@ def _run(args: argparse.Namespace) -> float:
             print(
                 "[nlolib] propagation aborted by user "
                 f"(records_written={int(meta.get('records_written', 0))}, "
-                f"status={int(meta.get('status', runner.api.NLOLIB_STATUS_ABORTED))})."
+                f"status={meta.get('status', 'aborted')})."
             )
             return float("nan")
-        telemetry = step_telemetry_from_meta(runner.last_meta)
-        db.save_case_from_solver_meta(
+        telemetry = step_telemetry_from_meta({"step_history": runner.last_result.step_history})
+        db.save_case_from_result(
             example_name=example_name,
             run_group=run_group,
             case_key=case_key,
-            solver_meta=runner.last_meta,
+            result=runner.last_result,
             meta={
                 "beta2": float(beta2),
                 "gamma": float(gamma),
@@ -584,7 +598,6 @@ def _run(args: argparse.Namespace) -> float:
     U_num = U_num_records[-1]
     U_true = U_true_records[-1]
     epsilon = relative_l2_intensity_error(U_num, U_true)
-    epsilon_percent = 100.0 * epsilon
     envelope_rel_error = relative_l2_intensity_error(
         U_num,
         U_true
@@ -648,7 +661,7 @@ def _run(args: argparse.Namespace) -> float:
         f"exp(-alpha*z_final)/LNL={math.exp(-alpha * z_final) / lnl:.6e} 1/m."
     )
     print(f"analytical z=0 envelope max error = {z0_analytic_error:.6e}")
-    print(f"epsilon (relative L2 intensity error) = {epsilon:.6e} ({epsilon_percent:.6f}%)")
+    report_metric("epsilon (relative L2 intensity error at z_final)", epsilon)
     print(
         "analytical peak compression (reference): "
         f"z/Z0={z_map_norm[ref_peak_idx]:.6f} "

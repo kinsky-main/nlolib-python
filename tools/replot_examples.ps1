@@ -2,17 +2,22 @@
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $repoRoot
 
+# The shared example set (the same in the MATLAB and Julia bindings). The
+# on-demand examples -- tensor_backend_scaling*, fixed_step_soliton_convergence,
+# two_mode_linear_beating -- are not run here.
 $pythonExamples = @(
-    "conservation_checks_rk4ip.py",
-    "fixed_step_soliton_convergence_rk4ip.py",
-    "linear_drift_rk4ip.py",
-    "raman_scattering_rk4ip.py",
-    "runtime_callable_operator_rk4ip.py",
-    "runtime_temporal_demo.py",
-    "second_order_soliton_rk4ip.py",
-    "spm_rk4ip.py",
-    "sqlite_snapshot_chunking_demo.py",
-    "two_mode_linear_beating_rk4ip.py"
+    "quickstart.py",
+    "linear_drift.py",
+    "spm.py",
+    "second_order_soliton.py",
+    "conservation_checks.py",
+    "raman_scattering.py",
+    "tensor_dispersion_3d.py",
+    "transverse_grin_beam.py",
+    "spatiotemporal_kerr_bullet.py",
+    "grin_soliton_fission.py",
+    "high_order_grin_soliton.py",
+    "sqlite_storage.py"
 )
 
 foreach ($example in $pythonExamples) {

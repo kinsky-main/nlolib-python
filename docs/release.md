@@ -152,8 +152,8 @@ The workflow then runs:
 - **verify** — `tools/check_version.py`, which fails if the tag name is not
   the version in `pyproject.toml`: the wheel filename carries that version, so
   a mismatch would publish something the tag does not describe. It then checks
-  out the core at `CORE_REF` and runs the core's SBOM and API-constant checks
-  against this package.
+  out the core at `CORE_REF` and runs the core's SBOM check and its API
+  surface check (`--surface enforce`) against this package.
 - **build** (per platform) — installs the Vulkan loader and glslang, pins the
   Visual Studio 2022 toolchain on Windows, runs the `build_wheel_*` script,
   then refuses any wheel tagged `-any` or carrying an unpublishable platform
@@ -161,7 +161,8 @@ The workflow then runs:
 - **smoke** (per platform) — on a clean runner with no checkout and no build
   tooling, installs the wheel into a fresh virtualenv, calls `nlolib.load()`,
   and runs one small propagation on the CPU backend
-  (`VECTOR_BACKEND_CPU == 0`). Never Vulkan: the runners have no GPU.
+  (`ExecutionOptions(backend_type="cpu")`). Never Vulkan: the runners have no
+  GPU.
 - **publish-pypi** — only on a tag. Uploads every platform's wheel in one call
   via PyPI Trusted Publishing.
 

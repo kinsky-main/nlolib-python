@@ -114,3 +114,8 @@ def filtered_relative_l2_intensity_error_curve(
         for idx in range(int(pred.shape[0]))
     ]
     return np.asarray(values, dtype=np.float64)
+
+
+def report_metric(label: str, value: float) -> None:
+    """Print one shared-example metric; the label is the same in every binding."""
+    print(f"{label}: {float(value):.6e}")

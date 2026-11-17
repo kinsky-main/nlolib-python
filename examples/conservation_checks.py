@@ -17,12 +17,13 @@ from backend.runner import (
     TemporalSimulationConfig,
     centered_time_grid,
 )
+from backend.metrics import report_metric
 from backend.storage import ExampleRunDB
 
 
 def _configure_runtime_logging(runner: NloExampleRunner) -> None:
     try:
-        runner.api.set_log_level(runner.nlo.NLOLIB_LOG_LEVEL_ERROR)
+        runner.api.set_log_level("error")
     except Exception:
         pass
     try:
@@ -51,23 +52,31 @@ def _compute_invariants(
     )
     return energy, momentum, hamiltonian
 
+# nlolib-example-parameters: begin
+n = 1024
+tfwhm = 0.1
+beta2 = -0.01
+gamma = 0.01
+carrier = 12.0
+num_records = 100
+error_tolerance = 1e-06
+# nlolib-example-parameters: end
+# Derived: dt = 16 t0 / n, z_final = 0.2 t0^2 / |beta2|, step sizes
+# z_final / 1000, / 600 and / 15000.
+
+
 def _run(args: argparse.Namespace) -> tuple[float, float, float]:
-    beta2 = -0.01
-    gamma = 0.01
     alpha = 0.0
-    tfwhm = 100e-3
-    t0 = tfwhm / (2.0 * math.log(1.0 + math.sqrt(2.0)))
+    t0 = tfwhm / (2.0 * math.acosh(math.sqrt(2.0)))
     p0 = abs(beta2) / (gamma * t0 * t0)
     ld = (t0 * t0) / abs(beta2)
     z_final = 0.2 * ld
 
     db = ExampleRunDB(args.db_path)
-    example_name = "conservation_checks_rk4ip"
+    example_name = "conservation_checks"
     case_key = "default"
 
-    n = 2**10
     dt = (16.0 * t0) / n
-    carrier = 12.0
     t_phys = centered_time_grid(n, dt)
     tau = t_phys / t0
     omega = 2.0 * math.pi * np.fft.fftfreq(n, d=dt)
@@ -83,12 +92,6 @@ def _run(args: argparse.Namespace) -> tuple[float, float, float]:
     if args.replot:
         run_group = db.resolve_replot_group(example_name, args.run_group)
         loaded = db.load_case(example_name=example_name, run_group=run_group, case_key=case_key)
-        meta = loaded.meta
-        n = int(meta["n"])
-        dt = float(meta["dt"])
-        beta2 = float(meta["beta2"])
-        gamma = float(meta["gamma"])
-        omega = 2.0 * math.pi * np.fft.fftfreq(n, d=dt)
         z_axis = np.asarray(loaded.z_axis, dtype=np.float64)
         records = np.asarray(loaded.records, dtype=np.complex128)
     else:
@@ -105,7 +108,7 @@ def _run(args: argparse.Namespace) -> tuple[float, float, float]:
             starting_step_size=z_final / 1000.0,
             max_step_size=z_final / 600.0,
             min_step_size=z_final / 15000.0,
-            error_tolerance=1e-6,
+            error_tolerance=error_tolerance,
             honor_solver_controls=True,
         )
         storage_kwargs = db.storage_kwargs(
@@ -117,17 +120,17 @@ def _run(args: argparse.Namespace) -> tuple[float, float, float]:
         z_records, a_records = runner.propagate_temporal_records(
             a0,
             sim_cfg,
-            num_records=100,
+            num_records=num_records,
             exec_options=exec_options,
             **storage_kwargs,
         )
         z_axis = np.asarray(z_records, dtype=np.float64)
         records = np.asarray(a_records, dtype=np.complex128)
-        db.save_case_from_solver_meta(
+        db.save_case_from_result(
             example_name=example_name,
             run_group=run_group,
             case_key=case_key,
-            solver_meta=runner.last_meta,
+            result=runner.last_result,
             meta={
                 "n": int(n),
                 "dt": float(dt),
@@ -167,9 +170,9 @@ def _run(args: argparse.Namespace) -> tuple[float, float, float]:
     )
 
     print(f"conservation-check summary (run_group={run_group}):")
-    print(f"  max |energy drift|      = {max_energy_drift:.6e}")
-    print(f"  max |momentum drift|    = {max_momentum_drift:.6e}")
-    print(f"  max |hamiltonian drift| = {max_hamiltonian_drift:.6e}")
+    report_metric("max energy drift", max_energy_drift)
+    report_metric("max momentum drift", max_momentum_drift)
+    report_metric("max Hamiltonian drift", max_hamiltonian_drift)
 
     return max_energy_drift, max_momentum_drift, max_hamiltonian_drift
 

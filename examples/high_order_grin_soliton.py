@@ -22,6 +22,7 @@ from backend.plotting import (
     plot_two_curve_comparison,
 )
 from backend.runner import centered_time_grid
+from backend.metrics import report_metric
 from backend.storage import ExampleRunDB
 
 
@@ -33,13 +34,36 @@ if str(PYTHON_API_DIR) not in sys.path:
 import nlolib as nlo
 
 
-DEFAULT_SOLITON_ORDER = 4.5
-DEFAULT_SATURATION_INTENSITY = 2.0
-DEFAULT_PROPAGATION_PERIODS = 8.0
-DEFAULT_AZIMUTHAL_AMPLITUDE = 0.25
-DEFAULT_AZIMUTHAL_ORDER = 4
-DEFAULT_NOISE_AMPLITUDE = 0.01
-DEFAULT_NOISE_SEED = 12345
+# nlolib-example-parameters: begin
+soliton_order = 4.5
+saturation_intensity = 2.0
+propagation_periods = 4.0
+azimuthal_amplitude = 0.25
+azimuthal_order = 4
+noise_amplitude = 0.01
+noise_seed = 12345
+nt = 512
+nx = 64
+ny = 64
+dt = 0.02
+dx = 0.06
+dy = 0.06
+temporal_width = 0.3
+mode_width_x = 0.55
+mode_width_y = 0.75
+spatial_chirp = 1.5
+beta2 = -0.08
+beta_t = -0.08
+grin_strength = 0.0015
+gamma_nonlinear = 1.5
+num_records = 24
+starting_step_size = 0.005
+max_step_size = 0.2
+min_step_size = 1e-08
+error_tolerance = 1e-05
+# nlolib-example-parameters: end
+# Derived: z_final = propagation_periods x the soliton period of beta2 and
+# temporal_width.
 
 
 def centered_spatial_grid(num_samples: int, delta: float) -> np.ndarray:
@@ -256,7 +280,6 @@ def grin_potential_grid(x_axis: np.ndarray, y_axis: np.ndarray, grin_strength: f
 
 
 def _run_case(
-    api: nlo.NLolib,
     field0_tyx: np.ndarray,
     *,
     nt: int,
@@ -274,7 +297,7 @@ def _run_case(
     num_records: int,
     exec_options,
     storage_kwargs: dict[str, object] | None = None,
-) -> tuple[np.ndarray, np.ndarray, dict[str, object]]:
+) -> tuple[np.ndarray, np.ndarray, object]:
     potential = grin_potential_grid(
         centered_spatial_grid(nx, dx),
         centered_spatial_grid(ny, dy),
@@ -284,38 +307,33 @@ def _run_case(
     beta_t = float(beta_t)
     gamma = float(gamma)
     saturation_intensity = float(saturation_intensity)
-    cfg = nlo.prepare_sim_config(
-        nt * nx * ny,
-        propagation_distance=float(z_final),
-        starting_step_size=5.0e-3,
-        max_step_size=2.0e-1,
-        min_step_size=1.0e-8,
-        error_tolerance=1.0e-5,
-        pulse_period=float(nt) * float(dt),
+    pulse = nlo.PulseSpec(
+        samples=flatten_tfast(field0_tyx).tolist(),
         delta_time=float(dt),
+        pulse_period=float(nt) * float(dt),
+        frequency_grid=(2.0 * np.pi * np.fft.fftfreq(int(nt), d=float(dt))).astype(np.complex128).tolist(),
         tensor_nt=int(nt),
         tensor_nx=int(nx),
         tensor_ny=int(ny),
-        tensor_layout=int(nlo.TENSOR_LAYOUT_XYT_T_FAST),
         delta_x=float(dx),
         delta_y=float(dy),
-        frequency_grid=(2.0 * np.pi * np.fft.fftfreq(int(nt), d=float(dt))).astype(np.complex128).tolist(),
         potential_grid=potential.tolist(),
-        runtime=nlo.RuntimeOperators(
-            linear_factor_fn=lambda A, wt, kx, ky: 1j * (half_beta2 * (wt * wt) + beta_t * (kx * kx + ky * ky)),
-            linear_fn=lambda A, D, h: np.exp(h * D),
-            nonlinear_fn=lambda A, I, V: 1j * A * (gamma * (I / (1.0 + I / saturation_intensity)) + V),
-        ),
     )
     kwargs = dict(storage_kwargs or {})
     if storage_kwargs is not None:
         kwargs.setdefault("return_records", False)
-    result = api.propagate(
-        cfg,
-        flatten_tfast(field0_tyx).tolist(),
-        int(num_records),
-        exec_options,
-        t_eval=np.linspace(0.0, float(z_final), int(num_records)).tolist(),
+    result = nlo.propagate(
+        pulse,
+        lambda A, wt, kx, ky: 1j * (half_beta2 * (wt * wt) + beta_t * (kx * kx + ky * ky)),
+        lambda A, I, V: 1j * A * (gamma * (I / (1.0 + I / saturation_intensity)) + V),
+        linear_step_operator=lambda A, D, h: np.exp(h * D),
+        propagation_distance=float(z_final),
+        starting_step_size=starting_step_size,
+        max_step_size=max_step_size,
+        min_step_size=min_step_size,
+        error_tolerance=error_tolerance,
+        num_records=int(num_records),
+        exec_options=exec_options,
         **kwargs,
     )
     z_axis = np.asarray(result.z_axis, dtype=np.float64)
@@ -329,42 +347,20 @@ def _run_case(
         )
     else:
         records_tyx = np.empty((0, int(nt), int(ny), int(nx)), dtype=np.complex128)
-    return z_axis, records_tyx, dict(result.meta)
+    return z_axis, records_tyx, result
 
 
 def _run(args: argparse.Namespace) -> float:
     try:
-        nlo.set_log_level(nlo.NLOLIB_LOG_LEVEL_ERROR)
+        nlo.set_log_level("error")
     except RuntimeError:
         pass
 
     db = ExampleRunDB(args.db_path)
-    api = nlo.NLolib()
-    api.set_progress_options(enabled=True, milestone_percent=2, emit_on_step_adjust=True)
-    example_name = "high_order_grin_soliton_rk4ip"
+    nlo.set_progress_options(enabled=True, milestone_percent=2, emit_on_step_adjust=True)
+    example_name = "high_order_grin_soliton"
     nonlinear_case_key = "nonlinear"
 
-    nt = 512
-    nx = 128
-    ny = 128
-    dt = 0.02
-    dx = 0.03
-    dy = 0.03
-    temporal_width = 0.30
-    soliton_order = float(args.soliton_order)
-    mode_width_x = 0.55
-    mode_width_y = 0.75
-    spatial_chirp = 1.5
-    azimuthal_amplitude = float(args.azimuthal_amplitude)
-    azimuthal_order = int(args.azimuthal_order)
-    noise_amplitude = float(args.noise_amplitude)
-    noise_seed = int(args.noise_seed)
-    beta2 = -0.08
-    beta_t = -0.08
-    grin_strength = 1.5e-3
-    gamma_nonlinear = 1.5
-    saturation_intensity = float(args.saturation_intensity)
-    propagation_periods = float(args.propagation_periods)
     if not np.isfinite(soliton_order) or soliton_order <= 0.0:
         raise ValueError("soliton_order must be a positive finite value.")
     if not np.isfinite(saturation_intensity) or saturation_intensity <= 0.0:
@@ -373,7 +369,6 @@ def _run(args: argparse.Namespace) -> float:
         raise ValueError("propagation_periods must be a positive finite value.")
     z_period = soliton_period(beta2, temporal_width)
     z_final = propagation_periods * z_period
-    num_records = 72
 
     t_axis = centered_time_grid(nt, dt)
     x_axis = centered_spatial_grid(nx, dx)
@@ -395,10 +390,7 @@ def _run(args: argparse.Namespace) -> float:
         noise_seed=noise_seed,
     ).astype(np.complex128)
 
-    exec_options = nlo.default_execution_options(
-        backend_type=nlo.VECTOR_BACKEND_AUTO,
-        fft_backend=nlo.FFT_BACKEND_AUTO,
-    )
+    exec_options = nlo.ExecutionOptions(backend_type="auto", fft_backend="auto")
 
     if args.replot:
         run_group = db.resolve_replot_group(
@@ -408,27 +400,6 @@ def _run(args: argparse.Namespace) -> float:
         )
         loaded_nonlinear = db.load_case(example_name=example_name, run_group=run_group, case_key=nonlinear_case_key)
         meta = loaded_nonlinear.meta
-        nt = int(meta["nt"])
-        nx = int(meta["nx"])
-        ny = int(meta["ny"])
-        dt = float(meta["dt"])
-        dx = float(meta["dx"])
-        dy = float(meta["dy"])
-        temporal_width = float(meta["temporal_width"])
-        soliton_order = float(meta["soliton_order"])
-        mode_width_x = float(meta["mode_width_x"])
-        mode_width_y = float(meta["mode_width_y"])
-        spatial_chirp = float(meta["spatial_chirp"])
-        azimuthal_amplitude = float(meta.get("azimuthal_amplitude", 0.0))
-        azimuthal_order = int(meta.get("azimuthal_order", 4))
-        noise_amplitude = float(meta.get("noise_amplitude", 0.0))
-        noise_seed = int(meta.get("noise_seed", 0))
-        beta2 = float(meta["beta2"])
-        beta_t = float(meta["beta_t"])
-        grin_strength = float(meta["grin_strength"])
-        gamma_nonlinear = float(meta["gamma_nonlinear"])
-        saturation_intensity = float(meta.get("saturation_intensity", np.inf))
-        propagation_periods = float(meta.get("propagation_periods", 0.0))
         t_axis = centered_time_grid(nt, dt)
         x_axis = centered_spatial_grid(nx, dx)
         y_axis = centered_spatial_grid(ny, dy)
@@ -464,8 +435,7 @@ def _run(args: argparse.Namespace) -> float:
             case_key=nonlinear_case_key,
             chunk_records=4,
         )
-        z_axis, nonlinear_records, nonlinear_meta = _run_case(
-            api,
+        z_axis, nonlinear_records, nonlinear_result = _run_case(
             field0_tyx,
             nt=nt,
             nx=nx,
@@ -506,11 +476,11 @@ def _run(args: argparse.Namespace) -> float:
             "saturation_intensity": float(saturation_intensity),
             "propagation_periods": float(propagation_periods),
         }
-        db.save_case_from_solver_meta(
+        db.save_case_from_result(
             example_name=example_name,
             run_group=run_group,
             case_key=nonlinear_case_key,
-            solver_meta=nonlinear_meta,
+            result=nonlinear_result,
             meta=meta,
         )
         loaded_nonlinear = db.load_case(example_name=example_name, run_group=run_group, case_key=nonlinear_case_key)
@@ -547,8 +517,6 @@ def _run(args: argparse.Namespace) -> float:
     y_scaled = y_axis / float(mode_width_y)
     z_period = soliton_period(beta2, temporal_width)
     z_final = float(z_axis[-1]) if z_axis.size > 0 else float(z_final)
-    if propagation_periods <= 0.0:
-        propagation_periods = z_final / z_period
     z_scaled = z_axis / ld
 
     output_dir = args.output_dir
@@ -670,11 +638,11 @@ def _run(args: argparse.Namespace) -> float:
     print("high-order GRIN saturable soliton summary")
     print(f"  soliton order = {soliton_order:.6f}")
     print(f"  saturation intensity = {saturation_intensity:.6f}")
-    print(f"  saturable nonlinear final radius / launch radius = {float(nonlinear_radius[-1] / nonlinear_radius[0]):.6f}")
+    report_metric("final radius / launch radius", float(nonlinear_radius[-1] / nonlinear_radius[0]))
     print(f"  saturable nonlinear radius excursion = {float(np.max(nonlinear_radius) / nonlinear_radius[0]):.6f}")
     print(f"  saturable nonlinear final temporal width / launch width = {float(nonlinear_temporal_width[-1] / nonlinear_temporal_width[0]):.6f}")
-    print(f"  saturable nonlinear min overlap fidelity = {float(np.min(nonlinear_overlap)):.6f}")
-    print(f"  saturable nonlinear power drift = {nonlinear_power_drift:.6e}")
+    report_metric("min overlap fidelity", float(np.min(nonlinear_overlap)))
+    report_metric("power drift", nonlinear_power_drift)
     print(f"  saturable nonlinear max power drift = {float(np.max(nonlinear_power_drift_curve)):.6e}")
     print(f"  saturable nonlinear max temporal peaks = {int(np.max(nonlinear_temporal_peaks))}")
     print(f"  saturable nonlinear final temporal peaks = {int(nonlinear_temporal_peaks[-1])}")
@@ -690,51 +658,6 @@ def _run(args: argparse.Namespace) -> float:
 class HighOrderGrinSolitonApp(ExampleAppBase):
     example_slug = "high_order_grin_soliton"
     description = "High-order GRIN-guided nonlinear tensor propagation using the C-backed runtime operators."
-
-    @classmethod
-    def configure_parser(cls, parser: argparse.ArgumentParser) -> None:
-        parser.add_argument(
-            "--soliton-order",
-            type=float,
-            default=DEFAULT_SOLITON_ORDER,
-            help="Launch soliton order used for the temporal sech envelope.",
-        )
-        parser.add_argument(
-            "--saturation-intensity",
-            type=float,
-            default=DEFAULT_SATURATION_INTENSITY,
-            help="Dimensionless saturation intensity I_sat for gamma*I/(1 + I/I_sat).",
-        )
-        parser.add_argument(
-            "--propagation-periods",
-            type=float,
-            default=DEFAULT_PROPAGATION_PERIODS,
-            help="Propagation distance in units of the high-order soliton period.",
-        )
-        parser.add_argument(
-            "--azimuthal-amplitude",
-            type=float,
-            default=DEFAULT_AZIMUTHAL_AMPLITUDE,
-            help="Amplitude epsilon of the cos(m*theta) azimuthal modulation seeding filamentation.",
-        )
-        parser.add_argument(
-            "--azimuthal-order",
-            type=int,
-            default=DEFAULT_AZIMUTHAL_ORDER,
-            help="Azimuthal mode number m for the cos(m*theta) seed.",
-        )
-        parser.add_argument(
-            "--noise-amplitude",
-            type=float,
-            default=DEFAULT_NOISE_AMPLITUDE,
-            help="Amplitude eta of the random transverse perturbation xi(x,y).",
-        )
-        parser.add_argument(
-            "--noise-seed",
-            type=int,
-            default=DEFAULT_NOISE_SEED,
-            help="RNG seed used to draw the noise field xi(x,y).",
-        )
 
     def run(self) -> float:
         return _run(self.args)

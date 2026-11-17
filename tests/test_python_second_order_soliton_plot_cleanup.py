@@ -21,7 +21,7 @@ def main() -> None:
         sys.path.insert(0, str(examples_dir))
 
     plotting = _load_module("backend_plotting", examples_dir / "backend" / "plotting.py")
-    second_order = _load_module("second_order_soliton_rk4ip", examples_dir / "second_order_soliton_rk4ip.py")
+    second_order = _load_module("second_order_soliton", examples_dir / "second_order_soliton.py")
 
     signature = inspect.signature(plotting.plot_wavelength_step_history)
     assert "proposed_step_sizes" not in signature.parameters

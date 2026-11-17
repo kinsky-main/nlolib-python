@@ -8,14 +8,7 @@ controller reads the same error norm on both paths. Skips when no Vulkan device 
 import math
 import os
 
-from nlolib import (
-    TENSOR_LAYOUT_XYT_T_FAST,
-    VECTOR_BACKEND_VULKAN,
-    NLolib,
-    RuntimeOperators,
-    default_execution_options,
-    prepare_sim_config,
-)
+import nlolib
 
 
 def _centered(n, d):
@@ -31,23 +24,18 @@ def _case_kerr1d(adaptive):
     field = [complex(math.exp(-((t / 0.2) ** 2)), 0.0) for t in _centered(n, dt)]
     h = 1.0e-3
     beta2, gamma, sat_quad, sat_den = -0.005, 80.0, 20.0, 0.5
-    cfg = prepare_sim_config(
-        n,
+    return dict(
+        pulse=nlolib.PulseSpec(samples=field, delta_time=dt, pulse_period=n * dt,
+                               frequency_grid=_omega(n, dt)),
+        linear_operator=lambda A, w: 1j * beta2 * (w * w),
+        nonlinear_operator=lambda A, I: 1j * A * (gamma * I - sat_quad * I * I) / (1.0 + sat_den * I),
+        linear_step_operator=lambda A, D, h: math.exp(h * D),
         propagation_distance=0.05,
         starting_step_size=(8.0 * h) if adaptive else h,
         max_step_size=(8.0 * h) if adaptive else h,
         min_step_size=1.0e-6 if adaptive else h,
         error_tolerance=1.0e-7,
-        pulse_period=n * dt,
-        delta_time=dt,
-        frequency_grid=_omega(n, dt),
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=lambda A, w: 1j * beta2 * (w * w),
-            dispersion_fn=lambda A, D, h: math.exp(h * D),
-            nonlinear_fn=lambda A, I: 1j * A * (gamma * I - sat_quad * I * I) / (1.0 + sat_den * I),
-        ),
     )
-    return cfg, field
 
 
 def _case_grin_tensor(adaptive):
@@ -64,39 +52,37 @@ def _case_grin_tensor(adaptive):
             potential.extend([complex(1.5e-3 * (xv * xv + yv * yv), 0.0)] * nt)
     h = 2.0e-3
     beta_t, beta_x, gamma, i_sat = -0.04, -0.08, 1.5, 4.0
-    cfg = prepare_sim_config(
-        nt * nxy * nxy,
+    return dict(
+        pulse=nlolib.PulseSpec(
+            samples=field,
+            delta_time=dt,
+            pulse_period=nt * dt,
+            frequency_grid=_omega(nt, dt),
+            tensor_nt=nt,
+            tensor_nx=nxy,
+            tensor_ny=nxy,
+            delta_x=dx,
+            delta_y=dx,
+            potential_grid=potential,
+        ),
+        linear_operator=lambda A, wt, kx, ky: 1j * (beta_t * (wt * wt) + beta_x * (kx * kx + ky * ky)),
+        nonlinear_operator=lambda A, I, V: 1j * A * (gamma * (I / (1.0 + I / i_sat)) + V),
+        linear_step_operator=lambda A, D, h: math.exp(h * D),
         propagation_distance=0.02,
         starting_step_size=(4.0 * h) if adaptive else h,
         max_step_size=(4.0 * h) if adaptive else h,
         min_step_size=1.0e-6 if adaptive else h,
         error_tolerance=1.0e-10,
-        pulse_period=nt * dt,
-        delta_time=dt,
-        tensor_nt=nt,
-        tensor_nx=nxy,
-        tensor_ny=nxy,
-        tensor_layout=int(TENSOR_LAYOUT_XYT_T_FAST),
-        delta_x=dx,
-        delta_y=dx,
-        frequency_grid=_omega(nt, dt),
-        potential_grid=potential,
-        runtime=RuntimeOperators(
-            linear_factor_fn=lambda A, wt, kx, ky: 1j * (beta_t * (wt * wt) + beta_x * (kx * kx + ky * ky)),
-            linear_fn=lambda A, D, h: math.exp(h * D),
-            nonlinear_fn=lambda A, I, V: 1j * A * (gamma * (I / (1.0 + I / i_sat)) + V),
-        ),
     )
-    return cfg, field
 
 
-def _run(api, opts, cfg, field, fused, adaptive):
+def _run(opts, case, fused, adaptive):
     if fused:
         os.environ.pop("NLO_DISABLE_VK_FUSED_STEP", None)
     else:
         os.environ["NLO_DISABLE_VK_FUSED_STEP"] = "1"
     kwargs = {"capture_step_history": True, "step_history_capacity": 20000} if adaptive else {}
-    result = api.propagate(cfg, field, 2, opts, **kwargs)
+    result = nlolib.propagate(**case, num_records=2, exec_options=opts, **kwargs)
     os.environ.pop("NLO_DISABLE_VK_FUSED_STEP", None)
     return result
 
@@ -108,29 +94,27 @@ def _rel_l2(a, b):
 
 
 def main():
-    api = NLolib()
-    api.set_progress_options(enabled=False)
-    opts = default_execution_options(VECTOR_BACKEND_VULKAN)
+    nlolib.set_progress_options(enabled=False)
+    opts = nlolib.ExecutionOptions(backend_type="vulkan")
     try:
-        probe_cfg, probe_field = _case_kerr1d(False)
-        api.propagate(probe_cfg, probe_field, 2, opts)
+        nlolib.propagate(**_case_kerr1d(False), num_records=2, exec_options=opts)
     except Exception as exc:  # noqa: BLE001 - any failure means no usable Vulkan device
         print(f"test_python_fused_rk_step: Vulkan unavailable ({exc}); skipped.")
         return
 
     for name, make_case in (("kerr1d", _case_kerr1d), ("grin_tensor", _case_grin_tensor)):
-        cfg, field = make_case(False)
-        fused = _run(api, opts, cfg, field, True, False).records[-1]
-        unfused = _run(api, opts, cfg, field, False, False).records[-1]
+        case = make_case(False)
+        fused = _run(opts, case, True, False).records[-1]
+        unfused = _run(opts, case, False, False).records[-1]
         err = _rel_l2(fused, unfused)
         print(f"test_python_fused_rk_step: {name} fixed step, fused vs unfused rel L2 {err:.2e}")
         assert err <= 1e-12, (name, err)
 
-        cfg, field = make_case(True)
-        fused_run = _run(api, opts, cfg, field, True, True)
-        unfused_run = _run(api, opts, cfg, field, False, True)
-        fused_steps = fused_run.meta["step_history"]["step_size"]
-        unfused_steps = unfused_run.meta["step_history"]["step_size"]
+        case = make_case(True)
+        fused_run = _run(opts, case, True, True)
+        unfused_run = _run(opts, case, False, True)
+        fused_steps = fused_run.step_history.step_size
+        unfused_steps = unfused_run.step_history.step_size
         assert len(fused_steps) == len(unfused_steps) and len(fused_steps) > 3, (
             name,
             len(fused_steps),

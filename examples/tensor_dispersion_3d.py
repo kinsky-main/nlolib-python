@@ -18,6 +18,7 @@ from backend.plotting import (
 )
 from backend.reference import exact_linear_tensor3d_records
 from backend.runner import NloExampleRunner, SimulationOptions, centered_time_grid
+from backend.metrics import report_metric
 from backend.storage import ExampleRunDB
 
 
@@ -108,28 +109,31 @@ def rms_width(axis: np.ndarray, weights: np.ndarray) -> float:
     return float(np.sqrt(max(variance, 0.0)))
 
 
+# nlolib-example-parameters: begin
+nt = 128
+nx = 64
+ny = 64
+dt = 0.04
+dx = 0.15
+dy = 0.15
+temporal_width = 0.24
+x_width = 0.6
+y_width = 0.7
+beta2 = 0.08
+beta_t = -0.2
+z_final = 0.8
+num_records = 24
+starting_step_size = 0.02
+max_step_size = 0.08
+min_step_size = 1e-05
+error_tolerance = 1e-07
+# nlolib-example-parameters: end
+
+
 def _run(args: argparse.Namespace) -> float:
     db = ExampleRunDB(args.db_path)
-    example_name = "tensor_dispersion_3d_rk4ip"
+    example_name = "tensor_dispersion_3d"
     case_key = "default"
-
-    nt = 512
-    nx = 128
-    ny = 128
-    dt = 0.04
-    dx = 0.15
-    dy = 0.15
-    temporal_width = 0.24
-    x_width = 0.60
-    y_width = 0.70
-    beta2 = 0.08
-    beta_t = -0.20
-    z_final = 0.80
-    num_records = 100
-    starting_step_size = 2.0e-2
-    max_step_size = 8.0e-2
-    min_step_size = 1.0e-5
-    error_tolerance = 1.0e-7
 
     t_axis = centered_time_grid(nt, dt)
     x_axis = centered_spatial_grid(nx, dx)
@@ -152,39 +156,13 @@ def _run(args: argparse.Namespace) -> float:
     if args.replot:
         run_group = db.resolve_replot_group(example_name, args.run_group)
         loaded = db.load_case(example_name=example_name, run_group=run_group, case_key=case_key)
-        meta = loaded.meta
-        nt = int(meta["nt"])
-        nx = int(meta["nx"])
-        ny = int(meta["ny"])
-        dt = float(meta["dt"])
-        dx = float(meta["dx"])
-        dy = float(meta["dy"])
-        temporal_width = float(meta["temporal_width"])
-        x_width = float(meta["x_width"])
-        y_width = float(meta["y_width"])
-        beta2 = float(meta["beta2"])
-        beta_t = float(meta["beta_t"])
-        t_axis = centered_time_grid(nt, dt)
-        x_axis = centered_spatial_grid(nx, dx)
-        y_axis = centered_spatial_grid(ny, dy)
-        omega = 2.0 * np.pi * np.fft.fftfreq(nt, d=dt)
-        kx = 2.0 * np.pi * np.fft.fftfreq(nx, d=dx)
-        ky = 2.0 * np.pi * np.fft.fftfreq(ny, d=dy)
-        field0_tyx = gaussian_tensor_field(
-            t_axis,
-            x_axis,
-            y_axis,
-            temporal_width=temporal_width,
-            x_width=x_width,
-            y_width=y_width,
-        ).astype(np.complex128)
         z_records = np.asarray(loaded.z_axis, dtype=np.float64)
         records_flat = np.asarray(loaded.records, dtype=np.complex128)
     else:
         run_group = db.begin_group(example_name, args.run_group)
         runtime = SimpleNamespace(
-            linear_factor_fn=lambda A, wt, kx, ky: (1.0j * ((0.5 * beta2) * (wt**2) + beta_t * ((kx**2) + (ky**2)))),  # noqa: E731
-            nonlinear_fn=lambda A, I, V: 0.0,  # noqa: E731
+            linear_operator=lambda A, wt, kx, ky: (1.0j * ((0.5 * beta2) * (wt**2) + beta_t * ((kx**2) + (ky**2)))),  # noqa: E731
+            nonlinear_operator=lambda A, I, V: 0.0,  # noqa: E731
         )
         storage_kwargs = db.storage_kwargs(
             example_name=example_name,
@@ -212,11 +190,11 @@ def _run(args: argparse.Namespace) -> float:
             exec_options=exec_options,
             **storage_kwargs,
         )
-        db.save_case_from_solver_meta(
+        db.save_case_from_result(
             example_name=example_name,
             run_group=run_group,
             case_key=case_key,
-            solver_meta=runner.last_meta,
+            result=runner.last_result,
             meta={
                 "nt": int(nt),
                 "nx": int(nx),
@@ -369,8 +347,8 @@ def _run(args: argparse.Namespace) -> float:
     print(f"tensor 3D dispersion example completed (run_group={run_group}).")
     print(f"records shape: {records_flat.shape}")
     print(f"record norms: first={record_norms[0]:.6e}, last={record_norms[-1]:.6e}, min={np.min(record_norms):.6e}")
-    print(f"power drift: {power_drift:.6e}")
-    print(f"final field relative error: {final_field_error:.6e}")
+    report_metric("final field relative error vs exact linear solution", final_field_error)
+    report_metric("power drift", power_drift)
     print(f"final intensity relative error: {final_intensity_error:.6e}")
     print(
         "final marginal intensity errors: "
