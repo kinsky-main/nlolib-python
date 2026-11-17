@@ -210,9 +210,10 @@ def main():
     at_z = _identity(pulse, None, CPU, record_z=record_z)
     assert at_z.z_axis == record_z and len(at_z.records) == 3
     # A single record_z position is sent as the manifest says, but core 9417e92
-    # overwrites the only record with the final field (src/nlolib.c,
-    # num_recorded_samples == 1u), so record_z=[z] with z < distance is not
-    # asserted here until the core records it.
+    # fills the only record with the final field (src/nlolib.c,
+    # num_recorded_samples == 1u); z_axis reports what actually came back.
+    one_z = _identity(pulse, None, CPU, record_z=[0.01])
+    assert one_z.z_axis == [0.02] and len(one_z.records) == 1, one_z.z_axis
     _expect(ValueError, "disagrees with len(record_z)",
             lambda: _identity(pulse, 2, CPU, record_z=record_z))
     print("test_python_api_smoke: record_z returns exactly the requested positions.")
@@ -311,7 +312,7 @@ def main():
             lambda: propagate(pulse, lambda A, w: 0.0, propagation_distance=0.02))
     print("test_python_api_smoke: string and missing operators rejected with TypeError.")
 
-    _expect(ValueError, "is not valid in nonlinear",
+    _expect(ValueError, "unknown identifier 'w'",
             lambda: propagate(pulse, lambda A, w: 0.0, lambda A, I: w * A,  # noqa: F821
                               propagation_distance=0.02))
     _expect(ValueError, "pulse must be a PulseSpec",

@@ -184,29 +184,23 @@ def test_two_parameters_naming_one_symbol_are_rejected():
 def test_context_symbols_match_the_c_parser():
     # The C parser rejects kx, ky, x, y and t in the temporal contexts and wt,
     # kx, ky in potential; the binding reports them before the C call.
-    temporal_rejects = {
-        "kx": lambda A, w: kx * w,  # noqa: E731,F821
-        "ky": lambda A, w: ky * w,  # noqa: E731,F821
-        "x": lambda A, w: x * w,  # noqa: E731,F821
-        "y": lambda A, w: y * w,  # noqa: E731,F821
-        "t": lambda A, w: t * w,  # noqa: E731,F821
-    }
-    for symbol, func in temporal_rejects.items():
-        _assert_raises_value_error(
-            lambda: translate_callable(func, RUNTIME_CONTEXT_DISPERSION_FACTOR),  # noqa: E731,B023
-            f"'{symbol}' is not valid in dispersion_factor",
-        )
-    potential_rejects = {
-        "wt": lambda x, y: wt * x,  # noqa: E731,F821
-        "kx": lambda x, y: kx * x,  # noqa: E731,F821
-        "ky": lambda x, y: ky * x,  # noqa: E731,F821
-        "A": lambda x, y: A * x,  # noqa: E731,F821
-    }
-    for symbol, func in potential_rejects.items():
-        _assert_raises_value_error(
-            lambda: translate_callable(func, RUNTIME_CONTEXT_POTENTIAL),  # noqa: E731,B023
-            f"'{symbol}' is not valid in potential",
-        )
+    # (f) Symbols enter only through parameters: a free name in the body is a
+    # captured constant whatever it is called, so an unbound one is an error
+    # and a bound one is a constant, never the runtime symbol.
+    _assert_raises_value_error(
+        lambda: translate_callable(lambda A, I: kz * A, RUNTIME_CONTEXT_NONLINEAR),  # noqa: E731,F821
+        "unknown identifier 'kz'",
+    )
+    _assert_raises_value_error(
+        lambda: translate_callable(lambda A, I: wt * A, RUNTIME_CONTEXT_NONLINEAR),  # noqa: E731,F821
+        "unknown identifier 'wt'",
+    )
+    w = 3.0
+    translated = translate_callable(lambda A, I: w * A, RUNTIME_CONTEXT_NONLINEAR)  # noqa: E731
+    assert translated.expression == "(c0*A)" and translated.constants == [3.0]
+    kx = 0.5
+    translated = translate_callable(lambda A, w: kx * w, RUNTIME_CONTEXT_DISPERSION_FACTOR)  # noqa: E731
+    assert translated.expression == "(c0*w)" and translated.constants == [0.5]
     _assert_raises_value_error(
         lambda: translate_callable(lambda A, I, V, x: x, RUNTIME_CONTEXT_NONLINEAR),  # noqa: E731
         "between 1 and 3",

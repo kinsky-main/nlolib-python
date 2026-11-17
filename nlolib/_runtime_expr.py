@@ -48,8 +48,8 @@ _CONTEXT_ALIASES: dict[str, dict[str, str]] = {
     RUNTIME_CONTEXT_NONLINEAR: {},
 }
 
-# Every name that is a symbol in some context. A free name from this set that
-# the current context does not list is an error, not a captured constant.
+# Every name that is a runtime symbol in some context. A parameter with one of
+# these names that the current context does not provide is an error.
 _ALL_SYMBOLS = {
     symbol
     for context, parameters in _CONTEXT_PARAMETERS.items()
@@ -340,15 +340,8 @@ class _ExpressionTranslator:
 
             if node.id == "i":
                 return node.id
-            if node.id in _ALL_SYMBOLS:
-                symbol = _context_symbol(self._context, node.id)
-                if symbol is None:
-                    raise ValueError(
-                        f"'{node.id}' is not valid in {self._context} operators; "
-                        f"allowed: {', '.join(_CONTEXT_PARAMETERS[self._context])}"
-                    )
-                return symbol
-
+            # Runtime symbols enter only through parameters: any other free
+            # name, whatever it is called, is a captured constant.
             return self._resolve_name_constant(node.id)
 
         if isinstance(node, ast.Attribute):

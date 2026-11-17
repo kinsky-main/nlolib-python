@@ -221,7 +221,11 @@ class PropagationExecutor:
             out_records = self._records_from_complex_array(out_arr, n, records_written_count)
 
         distance = float(request.sim_cfg.propagation.propagation_distance)
-        if request.record_z is not None:
+        if request.record_z is not None and len(request.record_z) == 1:
+            # Core 9417e92 fills a single record with the final field whatever
+            # position was asked for; report the position actually returned.
+            z_axis = [distance] if records_written_count > 0 else []
+        elif request.record_z is not None:
             z_axis = [float(v) for v in request.record_z[:records_written_count]]
         else:
             z_axis = self._build_z_axis(distance, records_written_count)
