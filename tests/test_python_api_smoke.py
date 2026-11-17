@@ -209,11 +209,27 @@ def main():
     record_z = [0.0, 0.005, 0.02]
     at_z = _identity(pulse, None, CPU, record_z=record_z)
     assert at_z.z_axis == record_z and len(at_z.records) == 3
-    # A single record_z position is sent as the manifest says, but core 9417e92
-    # fills the only record with the final field (src/nlolib.c,
-    # num_recorded_samples == 1u); z_axis reports what actually came back.
-    one_z = _identity(pulse, None, CPU, record_z=[0.01])
-    assert one_z.z_axis == [0.02] and len(one_z.records) == 1, one_z.z_axis
+    # One explicit position returns the field there, not the final field, and
+    # `final` is that last returned record. A dispersive run, so positions
+    # differ: the single-position record must match the same position of a
+    # three-position run.
+    chirped = PulseSpec(
+        samples=[g * complex(math.cos(40.0 * (i - 0.5 * n) / n), math.sin(40.0 * (i - 0.5 * n) / n))
+                 for i, g in enumerate(gaussian)],
+        delta_time=0.001,
+        pulse_period=n * 0.001,
+    )
+    dispersive = dict(propagation_distance=0.02, error_tolerance=1e-10, exec_options=CPU)
+    three = propagate(chirped, lambda A, w: 1j * 2.0e-4 * w * w, lambda A, I: 0.0,
+                      record_z=[0.0, 0.005, 0.02], **dispersive)
+    one = propagate(chirped, lambda A, w: 1j * 2.0e-4 * w * w, lambda A, I: 0.0,
+                    record_z=[0.005], **dispersive)
+    assert one.z_axis == [0.005] and len(one.records) == 1, one.z_axis
+    assert one.final == one.records[0]
+    at_005 = _max_abs_diff(one.records[0], three.records[1])
+    vs_end = _max_abs_diff(one.records[0], three.records[2])
+    assert at_005 <= 1e-8, at_005
+    assert vs_end >= 1e-3, f"the 0.005 record is the final field: {vs_end}"
     _expect(ValueError, "disagrees with len(record_z)",
             lambda: _identity(pulse, 2, CPU, record_z=record_z))
     print("test_python_api_smoke: record_z returns exactly the requested positions.")
