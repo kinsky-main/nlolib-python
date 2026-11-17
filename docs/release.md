@@ -161,7 +161,8 @@ The workflow then runs:
 - **smoke** (per platform) — on a clean runner with no checkout and no build
   tooling, installs the wheel into a fresh virtualenv, calls `nlolib.load()`,
   and runs one small propagation on the CPU backend
-  (`VECTOR_BACKEND_CPU == 0`). Never Vulkan: the runners have no GPU.
+  (`ExecutionOptions(backend_type="cpu")`). Never Vulkan: the runners have no
+  GPU.
 - **publish-pypi** — only on a tag. Uploads every platform's wheel in one call
   via PyPI Trusted Publishing.
 

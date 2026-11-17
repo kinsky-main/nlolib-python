@@ -10,6 +10,7 @@ using t = T / T0 and A(z, t) = sqrt(P0) * exp(-alpha * z / 2) * U(z, t).
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import math
 import sys
 from dataclasses import dataclass
@@ -161,6 +162,8 @@ def step_telemetry_from_meta(meta: dict[str, object] | None) -> StepTelemetry:
     if not meta:
         return StepTelemetry.empty()
     raw = meta.get("step_history")
+    if raw is not None and not isinstance(raw, dict):
+        raw = dataclasses.asdict(raw)
     if not isinstance(raw, dict):
         return StepTelemetry.empty()
 
@@ -412,7 +415,7 @@ def make_eta_abort_progress_callback(
     def _callback(info) -> int:
         nonlocal prompted, warned_noninteractive
 
-        if int(info.event_type) == int(module.PROGRESS_EVENT_FINISH):
+        if info.event_type == "finish":
             return 1
         if prompted:
             return 1
@@ -540,15 +543,15 @@ def _run(args: argparse.Namespace) -> float:
             print(
                 "[nlolib] propagation aborted by user "
                 f"(records_written={int(meta.get('records_written', 0))}, "
-                f"status={int(meta.get('status', runner.api.NLOLIB_STATUS_ABORTED))})."
+                f"status={meta.get('status', 'aborted')})."
             )
             return float("nan")
-        telemetry = step_telemetry_from_meta(runner.last_meta)
-        db.save_case_from_solver_meta(
+        telemetry = step_telemetry_from_meta({"step_history": runner.last_result.step_history})
+        db.save_case_from_result(
             example_name=example_name,
             run_group=run_group,
             case_key=case_key,
-            solver_meta=runner.last_meta,
+            result=runner.last_result,
             meta={
                 "beta2": float(beta2),
                 "gamma": float(gamma),

@@ -55,7 +55,7 @@ def _run(args: argparse.Namespace) -> float:
 
         run_group = db.begin_group(example_name, args.run_group)
         runner = NloExampleRunner()
-        api = runner.nlo.NLolib()
+        api = runner.nlo
 
         cases = [_case_from_scale(scale) for scale in args.scales]
         rows = _benchmark_nlolib_rows(args, runner, api, cases)

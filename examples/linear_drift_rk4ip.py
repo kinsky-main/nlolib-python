@@ -99,11 +99,11 @@ def _run(args: argparse.Namespace) -> float:
             exec_options,
             **storage_kwargs,
         )
-        db.save_case_from_solver_meta(
+        db.save_case_from_result(
             example_name=example_name,
             run_group=run_group,
             case_key=case_key,
-            solver_meta=runner.last_meta,
+            result=runner.last_result,
             meta={
                 "num_samples": int(num_samples),
                 "dt": float(dt),

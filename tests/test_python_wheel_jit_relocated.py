@@ -41,25 +41,23 @@ def _case():
     return n, dt, field, omega
 
 
-def _config(nlolib):
+def _propagate(nlolib, backend_type):
+    import math
+
     n, dt, field, omega = _case()
-    cfg = nlolib.prepare_sim_config(
-        n,
+    return nlolib.propagate(
+        nlolib.PulseSpec(samples=field, delta_time=dt, pulse_period=n * dt, frequency_grid=omega),
+        lambda A, w: 1j * -0.005 * (w * w),
+        lambda A, I: 1j * A * 80.0 * I,
+        linear_step_operator=lambda A, D, h: math.exp(h * D),
         propagation_distance=0.005,
         starting_step_size=1.0e-3,
         max_step_size=1.0e-3,
         min_step_size=1.0e-3,
         error_tolerance=1.0e-7,
-        pulse_period=n * dt,
-        delta_time=dt,
-        frequency_grid=omega,
-        runtime=nlolib.RuntimeOperators(
-            dispersion_factor_fn=lambda A, w: 1j * -0.005 * (w * w),
-            dispersion_fn=lambda A, D, h: math.exp(h * D),
-            nonlinear_fn=lambda A, I: 1j * A * 80.0 * I,
-        ),
+        num_records=2,
+        exec_options=nlolib.ExecutionOptions(backend_type=backend_type),
     )
-    return cfg, field
 
 
 def _stage_package(stage_dir, library):
@@ -92,9 +90,7 @@ def run_installed():
     assert Path(sys.prefix).resolve() in package.parents, f"not installed in the venv: {package}"
     nlolib.load()
 
-    api = nlolib.NLolib()
-    api.set_progress_options(enabled=False)
-    cfg, field = _config(nlolib)
+    nlolib.set_progress_options(enabled=False)
 
     # The counters have to carry the signal with profiling off, which is how
     # every ordinary run is configured.
@@ -103,16 +99,14 @@ def run_installed():
     # The CPU backend has no JIT, so neither counter may move on it: a
     # non-zero reading there would mean the Vulkan assertion below proves
     # nothing about the GPU path.
-    cpu = nlolib.default_execution_options(nlolib.VECTOR_BACKEND_CPU)
     nlolib.perf_profile_reset()
-    api.propagate(cfg, field, 2, cpu)
+    _propagate(nlolib, "cpu")
     on_cpu = nlolib.perf_profile_read()
     assert on_cpu.operator_jit_programs == 0, on_cpu.operator_jit_programs
     assert on_cpu.operator_jit_fallbacks == 0, on_cpu.operator_jit_fallbacks
 
-    vulkan = nlolib.default_execution_options(nlolib.VECTOR_BACKEND_VULKAN)
     nlolib.perf_profile_reset()
-    api.propagate(cfg, field, 2, vulkan)
+    _propagate(nlolib, "vulkan")
     on_gpu = nlolib.perf_profile_read()
     print(
         f"{NAME}: installed at {package.parent}, Vulkan run compiled "
@@ -130,11 +124,9 @@ def _vulkan_available():
     """Probe the in-tree package, so no wheel is built on a machine with no GPU."""
     import nlolib
 
-    api = nlolib.NLolib()
-    api.set_progress_options(enabled=False)
-    cfg, field = _config(nlolib)
+    nlolib.set_progress_options(enabled=False)
     try:
-        api.propagate(cfg, field, 2, nlolib.default_execution_options(nlolib.VECTOR_BACKEND_VULKAN))
+        _propagate(nlolib, "vulkan")
     except Exception as exc:  # noqa: BLE001 - any failure means no usable Vulkan device
         print(f"{NAME}: Vulkan unavailable ({exc}); skipped.")
         return False

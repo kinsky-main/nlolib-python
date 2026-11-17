@@ -284,7 +284,9 @@ jobs:
           # would let this pass for the wrong reason. The wheel has to stand on
           # its own.
           unset NLOLIB_LIBRARY
-          "$py" -I - <<'PY'
+          # Written to a file, not piped on stdin: operators are lowered from
+          # their source, which inspect cannot read back from stdin.
+          cat > "$RUNNER_TEMP/wheel_smoke.py" <<'PY'
           import os
 
           assert "NLOLIB_LIBRARY" not in os.environ, "discovery must not be overridden"
@@ -296,32 +298,27 @@ jobs:
           # puts it -- so this call raised OSError on every published wheel.
           nlolib.load()
 
-          api = nlolib.NLolib()
-          # backend_type 0: the CPU backend. Never Vulkan -- no GPU here.
-          assert nlolib.VECTOR_BACKEND_CPU == 0
-          cpu = nlolib.default_execution_options(nlolib.VECTOR_BACKEND_CPU)
+          # The CPU backend. Never Vulkan -- no GPU here.
+          cpu = nlolib.ExecutionOptions(backend_type="cpu")
 
-          limits = api.query_runtime_limits(exec_options=cpu)
+          limits = nlolib.query_runtime_limits(exec_options=cpu)
           assert int(limits.max_num_time_samples_runtime) > 0
 
           n = 64
-          cfg = nlolib.prepare_sim_config(
-              n,
-              propagation_distance=0.0,
-              starting_step_size=0.01,
-              max_step_size=0.1,
-              min_step_size=0.001,
-              error_tolerance=1e-6,
-              pulse_period=1.0,
-              delta_time=0.001,
-              frequency_grid=[0j] * n,
-              runtime=nlolib.RuntimeOperators(constants=[0.0, 0.0, 1.0]),
+          result = nlolib.propagate(
+              nlolib.PulseSpec(samples=[0j] * n, delta_time=0.001, pulse_period=1.0),
+              lambda A, w: 0.0,
+              lambda A, I: 1j * A * I,
+              propagation_distance=0.01,
+              num_records=2,
+              exec_options=cpu,
           )
-          records = api.propagate(cfg, [0j] * n, 2, cpu).records
+          records = result.records
           assert len(records) == 2, records
           assert len(records[0]) == n, len(records[0])
           print("wheel smoke test: CPU propagation returned", len(records), "x", len(records[0]))
           PY
+          "$py" -I "$RUNNER_TEMP/wheel_smoke.py"
 
   # TestPyPI is opt-in rather than automatic on every dispatch, so the ordinary
   # dry run stays a build-and-check with no outward effect. Needs a trusted

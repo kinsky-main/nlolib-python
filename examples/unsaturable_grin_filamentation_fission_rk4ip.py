@@ -94,7 +94,6 @@ def filamentation_index_curve(records_tyx: np.ndarray, radius_curve: np.ndarray)
 
 
 def _run_unsaturable_case(
-    api: nlo.NLolib,
     field0_tyx: np.ndarray,
     *,
     nt: int,
@@ -111,7 +110,7 @@ def _run_unsaturable_case(
     num_records: int,
     exec_options,
     storage_kwargs: dict[str, object] | None = None,
-) -> tuple[np.ndarray, np.ndarray, dict[str, object]]:
+) -> tuple[np.ndarray, np.ndarray, object]:
     potential = grin_potential_grid(
         centered_spatial_grid(nx, dx),
         centered_spatial_grid(ny, dy),
@@ -120,38 +119,33 @@ def _run_unsaturable_case(
     half_beta2 = 0.5 * float(beta2)
     beta_t = float(beta_t)
     gamma = float(gamma)
-    cfg = nlo.prepare_sim_config(
-        nt * nx * ny,
+    pulse = nlo.PulseSpec(
+        samples=flatten_tfast(field0_tyx).tolist(),
+        delta_time=float(dt),
+        pulse_period=float(nt) * float(dt),
+        frequency_grid=(2.0 * np.pi * np.fft.fftfreq(int(nt), d=float(dt))).astype(np.complex128).tolist(),
+        tensor_nt=int(nt),
+        tensor_nx=int(nx),
+        tensor_ny=int(ny),
+        delta_x=float(dx),
+        delta_y=float(dy),
+        potential_grid=potential.tolist(),
+    )
+    kwargs = dict(storage_kwargs or {})
+    if storage_kwargs is not None:
+        kwargs.setdefault("return_records", False)
+    result = nlo.propagate(
+        pulse,
+        lambda A, wt, kx, ky: 1j * (half_beta2 * (wt * wt) + beta_t * (kx * kx + ky * ky)),
+        lambda A, I, V: 1j * A * (gamma * I + V),
+        linear_step_operator=lambda A, D, h: np.exp(h * D),
         propagation_distance=float(z_final),
         starting_step_size=2.5e-3,
         max_step_size=7.5e-2,
         min_step_size=1.0e-9,
         error_tolerance=7.5e-7,
-        pulse_period=float(nt) * float(dt),
-        delta_time=float(dt),
-        tensor_nt=int(nt),
-        tensor_nx=int(nx),
-        tensor_ny=int(ny),
-        tensor_layout=int(nlo.TENSOR_LAYOUT_XYT_T_FAST),
-        delta_x=float(dx),
-        delta_y=float(dy),
-        frequency_grid=(2.0 * np.pi * np.fft.fftfreq(int(nt), d=float(dt))).astype(np.complex128).tolist(),
-        potential_grid=potential.tolist(),
-        runtime=nlo.RuntimeOperators(
-            linear_factor_fn=lambda A, wt, kx, ky: 1j * (half_beta2 * (wt * wt) + beta_t * (kx * kx + ky * ky)),
-            linear_fn=lambda A, D, h: np.exp(h * D),
-            nonlinear_fn=lambda A, I, V: 1j * A * (gamma * I + V),
-        ),
-    )
-    kwargs = dict(storage_kwargs or {})
-    if storage_kwargs is not None:
-        kwargs.setdefault("return_records", False)
-    result = api.propagate(
-        cfg,
-        flatten_tfast(field0_tyx).tolist(),
-        int(num_records),
-        exec_options,
-        t_eval=np.linspace(0.0, float(z_final), int(num_records)).tolist(),
+        num_records=int(num_records),
+        exec_options=exec_options,
         **kwargs,
     )
     z_axis = np.asarray(result.z_axis, dtype=np.float64)
@@ -165,18 +159,17 @@ def _run_unsaturable_case(
         )
     else:
         records_tyx = np.empty((0, int(nt), int(ny), int(nx)), dtype=np.complex128)
-    return z_axis, records_tyx, dict(result.meta)
+    return z_axis, records_tyx, result
 
 
 def _run(args: argparse.Namespace) -> float:
     try:
-        nlo.set_log_level(nlo.NLOLIB_LOG_LEVEL_ERROR)
+        nlo.set_log_level("error")
     except RuntimeError:
         pass
 
     db = ExampleRunDB(args.db_path)
-    api = nlo.NLolib()
-    api.set_progress_options(enabled=True, milestone_percent=2, emit_on_step_adjust=True)
+    nlo.set_progress_options(enabled=True, milestone_percent=2, emit_on_step_adjust=True)
     example_name = "unsaturable_grin_filamentation_fission_rk4ip"
     case_key = "unsaturable_kerr"
 
@@ -230,10 +223,7 @@ def _run(args: argparse.Namespace) -> float:
         noise_seed=noise_seed,
     ).astype(np.complex128)
 
-    exec_options = nlo.default_execution_options(
-        backend_type=nlo.VECTOR_BACKEND_AUTO,
-        fft_backend=nlo.FFT_BACKEND_AUTO,
-    )
+    exec_options = nlo.ExecutionOptions(backend_type="auto", fft_backend="auto")
 
     if args.replot:
         run_group = db.resolve_replot_group(example_name, args.run_group, required_case_keys=[case_key])
@@ -288,8 +278,7 @@ def _run(args: argparse.Namespace) -> float:
             case_key=case_key,
             chunk_records=4,
         )
-        z_axis, records, solver_meta = _run_unsaturable_case(
-            api,
+        z_axis, records, solver_result = _run_unsaturable_case(
             field0_tyx,
             nt=nt,
             nx=nx,
@@ -329,11 +318,11 @@ def _run(args: argparse.Namespace) -> float:
             "propagation_periods": float(propagation_periods),
             "nonlinear_response": "unsaturable_kerr",
         }
-        db.save_case_from_solver_meta(
+        db.save_case_from_result(
             example_name=example_name,
             run_group=run_group,
             case_key=case_key,
-            solver_meta=solver_meta,
+            result=solver_result,
             meta=meta,
         )
         loaded = db.load_case(example_name=example_name, run_group=run_group, case_key=case_key)

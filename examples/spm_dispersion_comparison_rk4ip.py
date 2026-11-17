@@ -35,7 +35,7 @@ class CaseConfig:
 
 def _configure_runtime_logging(runner: NloExampleRunner) -> None:
     try:
-        runner.api.set_log_level(runner.nlo.NLOLIB_LOG_LEVEL_ERROR)
+        runner.api.set_log_level("error")
     except Exception:
         pass
     try:
@@ -132,11 +132,11 @@ def _run_case(
         exec_options=exec_options,
         **storage_kwargs,
     )
-    db.save_case_from_solver_meta(
+    db.save_case_from_result(
         example_name=example_name,
         run_group=run_group,
         case_key=case.case_key,
-        solver_meta=runner.last_meta,
+        result=runner.last_result,
         meta={
             "num_samples": int(num_samples),
             "dt": float(dt),

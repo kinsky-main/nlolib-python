@@ -11,7 +11,6 @@ import sys
 from contextlib import closing
 from pathlib import Path
 
-import numpy as np
 from backend.app_base import ExampleAppBase
 from backend.storage import ExampleRunDB
 
@@ -46,8 +45,6 @@ def _run(args: argparse.Namespace) -> None:
         pulse_period=1.0,
         frequency_grid=freq,
     )
-    linear = nlolib.OperatorSpec(fn=lambda A, w: 0.0)
-    nonlinear = nlolib.OperatorSpec(fn=lambda A, I: 0.0)
 
     if args.replot:
         run_group = db.resolve_replot_group(example_name, args.run_group)
@@ -65,21 +62,17 @@ def _run(args: argparse.Namespace) -> None:
             chunk_records=6,
             sqlite_max_bytes=50 * 1024 * 1024 * 1024,
         )
-        t_eval = [0.2] if int(num_records) == 1 else [float(v) for v in np.linspace(0.0, 0.2, int(num_records))]
         result = nlolib.propagate(
             pulse,
-            linear,
-            nonlinear,
+            lambda A, w: 0.0,
+            lambda A, I: 0.0,
             propagation_distance=0.2,
-            t_eval=t_eval,
-            sqlite_path=storage_kwargs["sqlite_path"],
-            run_id=storage_kwargs["run_id"],
-            chunk_records=storage_kwargs["chunk_records"],
-            sqlite_max_bytes=storage_kwargs["sqlite_max_bytes"],
+            num_records=int(num_records),
             return_records=False,
+            **storage_kwargs,
         )
-        storage_result = result.meta.get("storage_result", {})
-        run_id = str(storage_result.get("run_id", ""))
+        storage_result = result.storage_result
+        run_id = storage_result.run_id
         db.save_case(
             example_name=example_name,
             run_group=run_group,
@@ -92,11 +85,11 @@ def _run(args: argparse.Namespace) -> None:
         print(f"run_group: {run_group}")
         print(
             "storage summary: "
-            f"captured={storage_result.get('records_captured', 0)} "
-            f"spilled={storage_result.get('records_spilled', 0)} "
-            f"chunks={storage_result.get('chunks_written', 0)} "
-            f"truncated={int(bool(storage_result.get('truncated', False)))} "
-            f"db_size_bytes={storage_result.get('db_size_bytes', 0)}"
+            f"captured={storage_result.records_captured} "
+            f"spilled={storage_result.records_spilled} "
+            f"chunks={storage_result.chunks_written} "
+            f"truncated={int(storage_result.truncated)} "
+            f"db_size_bytes={storage_result.db_size_bytes}"
         )
 
     with closing(sqlite3.connect(db.db_path)) as con:

@@ -24,32 +24,44 @@ RUNTIME_CONTEXT_POTENTIAL = "potential"
 
 _ALLOWED_FUNCS = {"exp", "log", "sqrt", "sin", "cos"}
 
-_CONTEXT_ALLOWED_SYMBOLS: dict[str, set[str]] = {
-    RUNTIME_CONTEXT_DISPERSION_FACTOR: {"A", "w", "wt", "kx", "ky", "x", "y", "t"},
-    RUNTIME_CONTEXT_DISPERSION: {"A", "D", "h", "w", "wt", "kx", "ky", "x", "y", "t", "V"},
-    RUNTIME_CONTEXT_NONLINEAR: {"A", "I", "V"},
-    RUNTIME_CONTEXT_LINEAR_FACTOR: {"A", "wt", "kx", "ky", "x", "y", "t"},
-    RUNTIME_CONTEXT_LINEAR: {"A", "D", "h", "wt", "kx", "ky", "x", "y", "t", "V"},
-    RUNTIME_CONTEXT_POTENTIAL: {"x", "y", "t", "wt", "kx", "ky"},
-}
-
-_CONTEXT_DEFAULT_PARAM_SYMBOLS: dict[str, list[str]] = {
-    RUNTIME_CONTEXT_DISPERSION_FACTOR: ["A", "w", "wt", "kx", "ky", "x", "y", "t"],
-    RUNTIME_CONTEXT_DISPERSION: ["A", "D", "h", "w", "wt", "kx", "ky", "x", "y", "t", "V"],
-    RUNTIME_CONTEXT_NONLINEAR: ["A", "I", "V"],
+# Per context: the symbols a parameter binds to, in binding order, and the
+# aliases the context also accepts. These are what the C parser allows
+# (src/physics/operator_program_compile.c, context_allows_symbol_*), minus the
+# x, y, t it also accepts in the nonlinear context and A in the potential one,
+# which the bindings do not expose.
+_CONTEXT_PARAMETERS: dict[str, list[str]] = {
+    RUNTIME_CONTEXT_DISPERSION_FACTOR: ["A", "w"],
+    RUNTIME_CONTEXT_DISPERSION: ["A", "D", "h", "w", "V"],
     RUNTIME_CONTEXT_LINEAR_FACTOR: ["A", "wt", "kx", "ky", "x", "y", "t"],
     RUNTIME_CONTEXT_LINEAR: ["A", "D", "h", "wt", "kx", "ky", "x", "y", "t", "V"],
-    RUNTIME_CONTEXT_POTENTIAL: ["x", "y", "t", "wt", "kx", "ky"],
+    RUNTIME_CONTEXT_POTENTIAL: ["x", "y", "t"],
+    RUNTIME_CONTEXT_NONLINEAR: ["A", "I", "V"],
 }
 
-_CONTEXT_MIN_PARAMS: dict[str, int] = {
-    RUNTIME_CONTEXT_DISPERSION_FACTOR: 1,
-    RUNTIME_CONTEXT_DISPERSION: 1,
-    RUNTIME_CONTEXT_NONLINEAR: 1,
-    RUNTIME_CONTEXT_LINEAR_FACTOR: 1,
-    RUNTIME_CONTEXT_LINEAR: 1,
-    RUNTIME_CONTEXT_POTENTIAL: 1,
+# w and wt name the same axis in every linear context.
+_CONTEXT_ALIASES: dict[str, dict[str, str]] = {
+    RUNTIME_CONTEXT_DISPERSION_FACTOR: {"wt": "w"},
+    RUNTIME_CONTEXT_DISPERSION: {"wt": "w"},
+    RUNTIME_CONTEXT_LINEAR_FACTOR: {"w": "wt"},
+    RUNTIME_CONTEXT_LINEAR: {"w": "wt"},
+    RUNTIME_CONTEXT_POTENTIAL: {},
+    RUNTIME_CONTEXT_NONLINEAR: {},
 }
+
+# Every name that is a symbol in some context. A free name from this set that
+# the current context does not list is an error, not a captured constant.
+_ALL_SYMBOLS = {
+    symbol
+    for context, parameters in _CONTEXT_PARAMETERS.items()
+    for symbol in (*parameters, *_CONTEXT_ALIASES[context])
+}
+
+
+def _context_symbol(context: str, name: str) -> str | None:
+    """The C symbol `name` denotes in `context`, or None if it is not one."""
+    if name in _CONTEXT_PARAMETERS[context]:
+        return name
+    return _CONTEXT_ALIASES[context].get(name)
 
 
 @dataclass
@@ -229,21 +241,14 @@ class _ExpressionTranslator:
         symbol_map: Mapping[str, str],
         captured_scope: Mapping[str, Any],
         constant_bindings: Mapping[str, float] | None,
-        auto_capture: bool,
     ):
         self._context = context
         self._symbol_map = dict(symbol_map)
         self._captured_scope = dict(captured_scope)
         self._constant_bindings = dict(constant_bindings or {})
-        self._auto_capture = auto_capture
         self._constants: list[float] = []
         self._constants_by_name: dict[str, int] = {}
 
-    def _require_symbol_allowed(self, symbol: str) -> None:
-        allowed = _CONTEXT_ALLOWED_SYMBOLS.get(self._context, set())
-        if symbol in allowed:
-            return
-        raise ValueError(f"'{symbol}' is not valid in {self._context} runtime expressions")
 
     def _add_named_constant(self, name: str, value: float) -> str:
         if name in self._constants_by_name:
@@ -261,10 +266,10 @@ class _ExpressionTranslator:
                 raise ValueError(f"constant binding '{name}' must be a finite real scalar")
             return self._add_named_constant(f"binding:{name}", float(value))
 
-        if not self._auto_capture or name not in self._captured_scope:
+        if name not in self._captured_scope:
             raise ValueError(
-                f"unknown identifier '{name}' in runtime callable; "
-                "bind it through OperatorSpec params / constant_bindings or capture a real scalar"
+                f"unknown identifier '{name}' in operator; "
+                "name it in constant_bindings or capture a real scalar"
             )
 
         value = self._captured_scope[name]
@@ -331,15 +336,18 @@ class _ExpressionTranslator:
 
         if isinstance(node, ast.Name):
             if node.id in self._symbol_map:
-                symbol = self._symbol_map[node.id]
-                self._require_symbol_allowed(symbol)
-                return symbol
+                return self._symbol_map[node.id]
 
             if node.id == "i":
                 return node.id
-            if node.id in {"w", "wt", "A", "I", "D", "V", "h", "kx", "ky", "x", "y", "t"}:
-                self._require_symbol_allowed(node.id)
-                return node.id
+            if node.id in _ALL_SYMBOLS:
+                symbol = _context_symbol(self._context, node.id)
+                if symbol is None:
+                    raise ValueError(
+                        f"'{node.id}' is not valid in {self._context} operators; "
+                        f"allowed: {', '.join(_CONTEXT_PARAMETERS[self._context])}"
+                    )
+                return symbol
 
             return self._resolve_name_constant(node.id)
 
@@ -364,14 +372,17 @@ def translate_callable(
     context: str,
     *,
     constant_bindings: Mapping[str, float] | None = None,
-    auto_capture: bool = True,
 ) -> TranslatedExpression:
-    if context not in _CONTEXT_ALLOWED_SYMBOLS:
-        raise ValueError(
-            "context must be one of: "
-            "'dispersion_factor', 'dispersion', 'nonlinear', "
-            "'linear_factor', 'linear', or 'potential'"
-        )
+    """Lower one operator callable to C expression text for `context`.
+
+    A parameter named after a symbol of the context (or an alias of one) binds
+    to it; the others take, in order, the next unused symbol in the context's
+    parameter order. A parameter named after a symbol the context does not
+    provide, or two parameters naming the same symbol, is a ValueError. Free names are captured from the callable's scope; a name in
+    `constant_bindings` wins over a captured one.
+    """
+    if context not in _CONTEXT_PARAMETERS:
+        raise ValueError(f"context must be one of: {', '.join(sorted(_CONTEXT_PARAMETERS))}")
 
     sig = inspect.signature(func)
     params = list(sig.parameters.values())
@@ -380,30 +391,39 @@ def translate_callable(
             inspect.Parameter.POSITIONAL_ONLY,
             inspect.Parameter.POSITIONAL_OR_KEYWORD,
         ):
-            raise ValueError("runtime callables must only use positional parameters")
+            raise ValueError("operator callables must only use positional parameters")
 
-    min_params = _CONTEXT_MIN_PARAMS[context]
-    default_symbols = _CONTEXT_DEFAULT_PARAM_SYMBOLS[context]
-    if len(params) < min_params or len(params) > len(default_symbols):
+    parameter_order = _CONTEXT_PARAMETERS[context]
+    if len(params) < 1 or len(params) > len(parameter_order):
         raise ValueError(
-            f"{context} callable must take between {min_params} and "
-            f"{len(default_symbols)} positional arguments"
+            f"{context} operator must take between 1 and {len(parameter_order)} "
+            f"positional arguments ({', '.join(parameter_order)})"
         )
 
-    allowed_symbols = _CONTEXT_ALLOWED_SYMBOLS[context]
     symbol_map: dict[str, str] = {}
     used_symbols: set[str] = set()
-    default_idx = 0
     for param in params:
-        if param.name in allowed_symbols and param.name not in used_symbols:
-            symbol = param.name
-        else:
-            while default_idx < len(default_symbols) and default_symbols[default_idx] in used_symbols:
-                default_idx += 1
-            if default_idx >= len(default_symbols):
-                raise ValueError(f"unsupported parameter '{param.name}' for {context} callable")
-            symbol = default_symbols[default_idx]
-            default_idx += 1
+        if param.name not in _ALL_SYMBOLS:
+            continue
+        symbol = _context_symbol(context, param.name)
+        if symbol is None:
+            raise ValueError(
+                f"parameter '{param.name}' names a symbol the {context} operator does not "
+                f"provide; allowed: {', '.join(parameter_order)}"
+            )
+        if symbol in used_symbols:
+            raise ValueError(
+                f"parameter '{param.name}' and another parameter both name '{symbol}' "
+                f"in the {context} operator"
+            )
+        symbol_map[param.name] = symbol
+        used_symbols.add(symbol)
+    for param in params:
+        if param.name in symbol_map:
+            continue
+        symbol = next((s for s in parameter_order if s not in used_symbols), None)
+        if symbol is None:
+            raise ValueError(f"unsupported parameter '{param.name}' for {context} operator")
         symbol_map[param.name] = symbol
         used_symbols.add(symbol)
 
@@ -419,7 +439,6 @@ def translate_callable(
         symbol_map=symbol_map,
         captured_scope=captured_scope,
         constant_bindings=constant_bindings,
-        auto_capture=auto_capture,
     )
     expression = translator.translate(expr_node)
     return TranslatedExpression(expression=expression, constants=translator.constants)

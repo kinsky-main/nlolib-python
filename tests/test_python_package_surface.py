@@ -7,28 +7,46 @@ import nlolib
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
+# The shared binding surface (docs/binding_api_vocabulary.md in the core
+# repository): 17 functions, 9 data types and 2 errors, the same in every binding.
+PUBLIC = {
+    "load", "loaded_library_path", "propagate", "query_runtime_limits",
+    "storage_is_available", "tensor_record_view", "set_log_file",
+    "set_log_buffer", "clear_log_buffer", "read_log_buffer", "set_log_level",
+    "set_progress_options", "set_progress_stream", "perf_profile_set_enabled",
+    "perf_profile_is_enabled", "perf_profile_reset", "perf_profile_read",
+    "PulseSpec", "ExecutionOptions", "StorageOptions", "PropagationResult",
+    "StepHistory", "StorageResult", "ProgressInfo", "RuntimeLimits",
+    "PerfProfileSnapshot", "NlolibError", "PropagationAbortedError",
+}
+
+# Removed with the move to the shared surface; none may come back as a
+# package attribute either.
+REMOVED = {
+    "NLolib", "OperatorSpec", "RuntimeOperators", "PropagateResult",
+    "PreparedSimConfig", "prepare_sim_config", "default_execution_options",
+    "default_storage_options", "translate_callable", "NT_MAX",
+    "STORAGE_RUN_ID_MAX", "TENSOR_LAYOUT_XYT_T_FAST", "VECTOR_BACKEND_CPU",
+    "VECTOR_BACKEND_AUTO", "NLO_VECTOR_BACKEND_CPU", "FFT_BACKEND_AUTO",
+    "NLOLIB_STATUS_OK", "NLOLIB_LOG_LEVEL_INFO", "PROGRESS_EVENT_ACCEPTED",
+    "NloComplex", "NloExecutionOptions", "NloRuntimeLimits",
+    "NloPerfProfileSnapshot", "NloStorageOptions", "NloStorageResult",
+    "make_complex_array", "complex_array_to_list",
+}
+
+
 def test_package_surface() -> None:
-    assert hasattr(nlolib, "NLolib")
-    assert hasattr(nlolib, "propagate")
-    assert hasattr(nlolib, "query_runtime_limits")
-    assert hasattr(nlolib, "NloPerfProfileSnapshot")
-    assert hasattr(nlolib, "perf_profile_set_enabled")
-    assert hasattr(nlolib, "perf_profile_is_enabled")
-    assert hasattr(nlolib, "perf_profile_reset")
-    assert hasattr(nlolib, "perf_profile_read")
-    assert hasattr(nlolib, "PulseSpec")
-    assert hasattr(nlolib, "OperatorSpec")
-    assert hasattr(nlolib, "RuntimeOperators")
-    assert not hasattr(nlolib, "translate_callable")
+    assert set(nlolib.__all__) == PUBLIC, sorted(set(nlolib.__all__) ^ PUBLIC)
+    assert len(nlolib.__all__) == len(PUBLIC), "duplicate entries in __all__"
+    for name in PUBLIC:
+        assert hasattr(nlolib, name), name
+    for name in REMOVED:
+        assert not hasattr(nlolib, name), f"{name} is still a package attribute"
+    assert issubclass(nlolib.NlolibError, RuntimeError)
+    assert issubclass(nlolib.PropagationAbortedError, nlolib.NlolibError)
     assert importlib.util.find_spec("nlolib.translate") is None
-    assert hasattr(nlolib.NLolib, "perf_profile_set_enabled")
-    assert hasattr(nlolib.NLolib, "perf_profile_is_enabled")
-    assert hasattr(nlolib.NLolib, "perf_profile_reset")
-    assert hasattr(nlolib.NLolib, "perf_profile_read")
-    assert "._legacy_impl" not in nlolib.NLolib.__module__
-    assert "._legacy_impl" not in nlolib.propagate.__module__
-    assert importlib.util.find_spec("nlolib._legacy_impl") is None
-    assert importlib.util.find_spec("nlolib_ctypes") is None
+    assert importlib.util.find_spec("nlolib._client") is None
+    assert importlib.util.find_spec("nlolib._wrapper") is None
 
 
 def test_version_attribute() -> None:

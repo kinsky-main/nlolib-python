@@ -183,8 +183,8 @@ def _run(args: argparse.Namespace) -> float:
     else:
         run_group = db.begin_group(example_name, args.run_group)
         runtime = SimpleNamespace(
-            linear_factor_fn=lambda A, wt, kx, ky: (1.0j * ((0.5 * beta2) * (wt**2) + beta_t * ((kx**2) + (ky**2)))),  # noqa: E731
-            nonlinear_fn=lambda A, I, V: 0.0,  # noqa: E731
+            linear_operator=lambda A, wt, kx, ky: (1.0j * ((0.5 * beta2) * (wt**2) + beta_t * ((kx**2) + (ky**2)))),  # noqa: E731
+            nonlinear_operator=lambda A, I, V: 0.0,  # noqa: E731
         )
         storage_kwargs = db.storage_kwargs(
             example_name=example_name,
@@ -212,11 +212,11 @@ def _run(args: argparse.Namespace) -> float:
             exec_options=exec_options,
             **storage_kwargs,
         )
-        db.save_case_from_solver_meta(
+        db.save_case_from_result(
             example_name=example_name,
             run_group=run_group,
             case_key=case_key,
-            solver_meta=runner.last_meta,
+            result=runner.last_result,
             meta={
                 "nt": int(nt),
                 "nx": int(nx),

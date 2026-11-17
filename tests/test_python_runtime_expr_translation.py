@@ -1,7 +1,10 @@
 import math
 
+from nlolib._config import _lower_operators
 from nlolib._runtime_expr import (
+    RUNTIME_CONTEXT_DISPERSION,
     RUNTIME_CONTEXT_DISPERSION_FACTOR,
+    RUNTIME_CONTEXT_LINEAR,
     RUNTIME_CONTEXT_LINEAR_FACTOR,
     RUNTIME_CONTEXT_POTENTIAL,
     RUNTIME_CONTEXT_NONLINEAR,
@@ -119,7 +122,7 @@ def test_rejects_invalid_signature():
             lambda: 0.0,  # noqa: E731
             RUNTIME_CONTEXT_DISPERSION_FACTOR,
         ),
-        "dispersion_factor callable",
+        "dispersion_factor operator must take",
     )
 
 
@@ -130,6 +133,83 @@ def test_rejects_disallowed_complex_literal():
             RUNTIME_CONTEXT_DISPERSION_FACTOR,
         ),
         "complex literals",
+    )
+
+
+def test_w_and_wt_name_the_same_axis():
+    # The linear operator of a temporal run lowers in dispersion_factor (w), of
+    # a tensor run in linear_factor (wt); either spelling works in both.
+    assert translate_callable(lambda A, wt: wt, RUNTIME_CONTEXT_DISPERSION_FACTOR).expression == "w"
+    assert translate_callable(lambda A, w: w, RUNTIME_CONTEXT_LINEAR_FACTOR).expression == "wt"
+    assert translate_callable(lambda A, D, h, w: w, RUNTIME_CONTEXT_LINEAR).expression == "wt"
+    assert translate_callable(lambda A, D, h, wt: wt, RUNTIME_CONTEXT_DISPERSION).expression == "w"
+
+
+def test_parameters_bind_by_name_then_by_order():
+    # field and omega are not symbols, so they take the next unused symbols.
+    assert translate_callable(lambda field, omega: field * omega,
+                              RUNTIME_CONTEXT_DISPERSION_FACTOR).expression == "(A*w)"
+    # A named parameter keeps its symbol wherever it sits.
+    assert translate_callable(lambda q, A: q * A, RUNTIME_CONTEXT_DISPERSION_FACTOR).expression == "(w*A)"
+    assert translate_callable(lambda u, v: u * v, RUNTIME_CONTEXT_POTENTIAL).expression == "(x*y)"
+    # (b) named parameters bind first, the rest fill the remaining symbols in order.
+    assert translate_callable(lambda B, A: B * A, RUNTIME_CONTEXT_DISPERSION_FACTOR).expression == "(w*A)"
+    assert translate_callable(lambda q, D, A: q * D, RUNTIME_CONTEXT_DISPERSION).expression == "(h*D)"
+
+
+def test_parameter_naming_a_missing_symbol_is_rejected():
+    # (c) kx is a runtime symbol, but not one dispersion_factor provides.
+    _assert_raises_value_error(
+        lambda: translate_callable(lambda A, kx: kx, RUNTIME_CONTEXT_DISPERSION_FACTOR),  # noqa: E731
+        "parameter 'kx' names a symbol the dispersion_factor operator does not provide",
+    )
+    _assert_raises_value_error(
+        lambda: translate_callable(lambda x, wt: x, RUNTIME_CONTEXT_POTENTIAL),  # noqa: E731
+        "parameter 'wt' names a symbol the potential operator does not provide",
+    )
+
+
+def test_two_parameters_naming_one_symbol_are_rejected():
+    # (d) w and wt are the same axis, so naming both is ambiguous.
+    _assert_raises_value_error(
+        lambda: translate_callable(lambda A, w, wt: w, RUNTIME_CONTEXT_LINEAR_FACTOR),  # noqa: E731
+        "both name 'wt'",
+    )
+    _assert_raises_value_error(
+        lambda: translate_callable(lambda A, wt, w: w, RUNTIME_CONTEXT_DISPERSION),  # noqa: E731
+        "both name 'w'",
+    )
+
+
+def test_context_symbols_match_the_c_parser():
+    # The C parser rejects kx, ky, x, y and t in the temporal contexts and wt,
+    # kx, ky in potential; the binding reports them before the C call.
+    temporal_rejects = {
+        "kx": lambda A, w: kx * w,  # noqa: E731,F821
+        "ky": lambda A, w: ky * w,  # noqa: E731,F821
+        "x": lambda A, w: x * w,  # noqa: E731,F821
+        "y": lambda A, w: y * w,  # noqa: E731,F821
+        "t": lambda A, w: t * w,  # noqa: E731,F821
+    }
+    for symbol, func in temporal_rejects.items():
+        _assert_raises_value_error(
+            lambda: translate_callable(func, RUNTIME_CONTEXT_DISPERSION_FACTOR),  # noqa: E731,B023
+            f"'{symbol}' is not valid in dispersion_factor",
+        )
+    potential_rejects = {
+        "wt": lambda x, y: wt * x,  # noqa: E731,F821
+        "kx": lambda x, y: kx * x,  # noqa: E731,F821
+        "ky": lambda x, y: ky * x,  # noqa: E731,F821
+        "A": lambda x, y: A * x,  # noqa: E731,F821
+    }
+    for symbol, func in potential_rejects.items():
+        _assert_raises_value_error(
+            lambda: translate_callable(func, RUNTIME_CONTEXT_POTENTIAL),  # noqa: E731,B023
+            f"'{symbol}' is not valid in potential",
+        )
+    _assert_raises_value_error(
+        lambda: translate_callable(lambda A, I, V, x: x, RUNTIME_CONTEXT_NONLINEAR),  # noqa: E731
+        "between 1 and 3",
     )
 
 
@@ -153,6 +233,49 @@ def test_lambdas_sharing_a_line_lower_to_their_own_bodies():
     assert translate_callable(table["nonlinear"], RUNTIME_CONTEXT_NONLINEAR).expression == "(5*I)"
 
 
+def test_constant_bindings_win_over_captured_names():
+    gamma = 1.0
+    translated = translate_callable(
+        lambda A, I: 1j * gamma * A * I,  # noqa: E731
+        RUNTIME_CONTEXT_NONLINEAR,
+        constant_bindings={"gamma": 2.5},
+    )
+    assert translated.constants == [2.5]
+
+
+def test_operators_lower_to_the_field_the_run_type_compiles():
+    operators = {
+        "linear_operator": lambda A, w: 1j * w,
+        "linear_step_operator": lambda A, D, h: D * h,
+        "potential_operator": None,
+        "nonlinear_operator": lambda A, I: 1j * A * I,
+    }
+    temporal, _ = _lower_operators(operators, tensor_run=False, constant_bindings=None)
+    assert set(temporal) == {"dispersion_factor_expr", "dispersion_expr", "nonlinear_expr"}
+    assert temporal["dispersion_factor_expr"] == "(i*w)"
+
+    tensor_ops = dict(operators, potential_operator=lambda x, y: x * y)
+    tensor, _ = _lower_operators(tensor_ops, tensor_run=True, constant_bindings=None)
+    assert set(tensor) == {"linear_factor_expr", "linear_expr", "potential_expr", "nonlinear_expr"}
+    assert tensor["linear_factor_expr"] == "(i*wt)"
+
+    _assert_raises_value_error(
+        lambda: _lower_operators(tensor_ops, tensor_run=False, constant_bindings=None),  # noqa: E731
+        "only used by tensor runs",
+    )
+
+
+def test_constants_from_several_operators_are_renumbered():
+    a, b = 0.5, 0.25
+    expressions, constants = _lower_operators(
+        {"linear_operator": lambda A, w: a * w, "nonlinear_operator": lambda A, I: b * I},
+        tensor_run=False,
+        constant_bindings=None,
+    )
+    assert expressions == {"dispersion_factor_expr": "(c0*w)", "nonlinear_expr": "(c1*I)"}
+    assert constants == [a, b]
+
+
 def main():
     test_numpy_functions_translate()
     test_math_functions_translate()
@@ -164,7 +287,15 @@ def main():
     test_rejects_unsupported_numpy_call()
     test_rejects_invalid_signature()
     test_rejects_disallowed_complex_literal()
+    test_w_and_wt_name_the_same_axis()
+    test_parameters_bind_by_name_then_by_order()
+    test_parameter_naming_a_missing_symbol_is_rejected()
+    test_two_parameters_naming_one_symbol_are_rejected()
+    test_context_symbols_match_the_c_parser()
     test_lambdas_sharing_a_line_lower_to_their_own_bodies()
+    test_constant_bindings_win_over_captured_names()
+    test_operators_lower_to_the_field_the_run_type_compiles()
+    test_constants_from_several_operators_are_renumbered()
     print("test_python_runtime_expr_translation: callable translation coverage validated.")
 
 

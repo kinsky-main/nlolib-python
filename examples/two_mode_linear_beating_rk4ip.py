@@ -29,7 +29,7 @@ import nlolib as nlo
 
 def _configure_runtime_logging() -> None:
     try:
-        nlo.set_log_level(nlo.NLOLIB_LOG_LEVEL_ERROR)
+        nlo.set_log_level("error")
     except Exception:
         pass
     try:
@@ -62,16 +62,9 @@ def _run(args: argparse.Namespace) -> float:
             tensor_nt=2,
             tensor_nx=1,
             tensor_ny=1,
-            tensor_layout=int(nlo.TENSOR_LAYOUT_XYT_T_FAST),
             frequency_grid=[complex(1.0, 0.0), complex(-1.0, 0.0)],
             delta_x=1.0,
             delta_y=1.0,
-        )
-        linear_operator = nlo.OperatorSpec(fn=lambda A, w: (1.0j * kappa) * w)
-        nonlinear_operator = nlo.OperatorSpec(fn=lambda A, I: 0.0)
-        exec_options = nlo.default_execution_options(
-            backend_type=nlo.VECTOR_BACKEND_AUTO,
-            fft_backend=nlo.FFT_BACKEND_AUTO,
         )
         storage_kwargs = db.storage_kwargs(
             example_name=example_name,
@@ -79,23 +72,18 @@ def _run(args: argparse.Namespace) -> float:
             case_key=case_key,
             chunk_records=32,
         )
-        t_eval = np.linspace(0.0, float(z_final), int(num_records)).tolist()
         result = nlo.propagate(
             pulse,
-            linear_operator,
-            nonlinear_operator,
+            lambda A, w: (1.0j * kappa) * w,
+            lambda A, I: 0.0,
             propagation_distance=float(z_final),
-            t_eval=t_eval,
-            first_step=1e-3,
-            max_step=1e-3,
-            min_step=1e-3,
-            rtol=1e-6,
-            exec_options=exec_options,
-            sqlite_path=storage_kwargs["sqlite_path"],
-            run_id=storage_kwargs["run_id"],
-            chunk_records=storage_kwargs["chunk_records"],
-            sqlite_max_bytes=storage_kwargs["sqlite_max_bytes"],
-            log_final_output_field_to_db=storage_kwargs["log_final_output_field_to_db"],
+            num_records=int(num_records),
+            starting_step_size=1e-3,
+            max_step_size=1e-3,
+            min_step_size=1e-3,
+            error_tolerance=1e-6,
+            exec_options=nlo.ExecutionOptions(backend_type="auto"),
+            **storage_kwargs,
         )
         records = np.asarray(result.records, dtype=np.complex128).reshape(num_records, 2)
         z_axis = np.asarray(result.z_axis, dtype=np.float64)
@@ -103,7 +91,7 @@ def _run(args: argparse.Namespace) -> float:
             example_name=example_name,
             run_group=run_group,
             case_key=case_key,
-            run_id=str(result.meta["storage_result"]["run_id"]),
+            run_id=result.storage_result.run_id,
             meta={"kappa": float(kappa)},
         )
 

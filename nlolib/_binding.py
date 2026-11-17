@@ -18,16 +18,10 @@ STORAGE_RUN_ID_MAX = 64
 VECTOR_BACKEND_CPU = 0
 VECTOR_BACKEND_VULKAN = 1
 VECTOR_BACKEND_AUTO = 2
-NLO_VECTOR_BACKEND_CPU = VECTOR_BACKEND_CPU
-NLO_VECTOR_BACKEND_VULKAN = VECTOR_BACKEND_VULKAN
-NLO_VECTOR_BACKEND_AUTO = VECTOR_BACKEND_AUTO
 
 FFT_BACKEND_AUTO = 0
 FFT_BACKEND_FFTW = 1
 FFT_BACKEND_VKFFT = 2
-NLO_FFT_BACKEND_AUTO = FFT_BACKEND_AUTO
-NLO_FFT_BACKEND_FFTW = FFT_BACKEND_FFTW
-NLO_FFT_BACKEND_VKFFT = FFT_BACKEND_VKFFT
 
 NLOLIB_STATUS_OK = 0
 NLOLIB_STATUS_INVALID_ARGUMENT = 1
@@ -285,17 +279,20 @@ class NloPropagateOutput(ctypes.Structure):
     ]
 
 
-def load(path: Path | None= None) -> ctypes.CDLL:
+def load_library(path: str | Path | None = None) -> ctypes.CDLL:
     """
     Load and configure the NLOLib shared library.
 
-    Set NLOLIB_LIBRARY to override discovery.
+    An explicit `path` is used as given. Without one, NLOLIB_LIBRARY names the
+    library, and otherwise it is looked for next to the package.
     """
-    lib_path: Path | None = path
+    lib_path: Path | None = Path(path) if path is not None else None
     env_override = os.environ.get("NLOLIB_LIBRARY")
-    if env_override:
+    if lib_path is not None:
+        pass
+    elif env_override:
         lib_path = Path(env_override)
-    elif lib_path is None or not lib_path.exists():
+    else:
         package_dir = Path(__file__).resolve().parent
         package_root = package_dir.parent
         if os.name == "nt":
@@ -312,8 +309,8 @@ def load(path: Path | None= None) -> ctypes.CDLL:
 
     if lib_path is None or not lib_path.exists():
         raise OSError(
-            "Unable to locate NLOLib shared library. "
-            "Set NLOLIB_LIBRARY to the full path."
+            f"Unable to locate the NLOLib shared library{f' at {lib_path}' if lib_path else ''}. "
+            "Pass its path to nlolib.load() or set NLOLIB_LIBRARY."
         )
  
     lib = ctypes.CDLL(str(lib_path))
@@ -459,61 +456,3 @@ def complex_array_to_list(values: ctypes.Array, count: int) -> list[complex]:
     for i in range(count):
         out[i] = complex(values[i].re, values[i].im)
     return out
-
-
-def default_execution_options(
-    backend_type: int = VECTOR_BACKEND_AUTO,
-    fft_backend: int = FFT_BACKEND_AUTO,
-) -> NloExecutionOptions:
-    """
-    Build default execution options matching C defaults.
-    """
-    options = NloExecutionOptions()
-    options.backend_type = int(backend_type)
-    options.fft_backend = int(fft_backend)
-    options.device_heap_fraction = 0.70
-    options.record_ring_target = 0
-    options.forced_device_budget_bytes = 0
-    options.vulkan.physical_device = None
-    options.vulkan.device = None
-    options.vulkan.queue = None
-    options.vulkan.queue_family_index = 0
-    options.vulkan.command_pool = None
-    options.vulkan.descriptor_set_budget_bytes = 0
-    options.vulkan.descriptor_set_count_override = 0
-    return options
-
-
-def default_storage_options(
-    *,
-    sqlite_path: str,
-    run_id: str | None = None,
-    sqlite_max_bytes: int = 0,
-    chunk_records: int = 0,
-    cap_policy: int = STORAGE_DB_CAP_POLICY_STOP_WRITES,
-    log_final_output_field_to_db: bool = False,
-) -> tuple[NloStorageOptions, list[bytes]]:
-    """
-    Build storage options and return keepalive byte buffers for ctypes strings.
-    """
-    opts = NloStorageOptions()
-    keepalive: list[bytes] = []
-
-    if not sqlite_path:
-        raise ValueError("sqlite_path must be a non-empty string")
-    path_b = sqlite_path.encode("utf-8")
-    keepalive.append(path_b)
-    opts.sqlite_path = ctypes.c_char_p(path_b)
-
-    if run_id is not None and run_id != "":
-        run_b = run_id.encode("utf-8")
-        keepalive.append(run_b)
-        opts.run_id = ctypes.c_char_p(run_b)
-    else:
-        opts.run_id = None
-
-    opts.sqlite_max_bytes = int(sqlite_max_bytes)
-    opts.chunk_records = int(chunk_records)
-    opts.cap_policy = int(cap_policy)
-    opts.log_final_output_field_to_db = int(bool(log_final_output_field_to_db))
-    return opts, keepalive

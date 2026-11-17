@@ -22,7 +22,7 @@ from backend.storage import ExampleRunDB
 
 def _configure_runtime_logging(runner: NloExampleRunner) -> None:
     try:
-        runner.api.set_log_level(runner.nlo.NLOLIB_LOG_LEVEL_ERROR)
+        runner.api.set_log_level("error")
     except Exception:
         pass
     try:
@@ -123,11 +123,11 @@ def _run(args: argparse.Namespace) -> tuple[float, float, float]:
         )
         z_axis = np.asarray(z_records, dtype=np.float64)
         records = np.asarray(a_records, dtype=np.complex128)
-        db.save_case_from_solver_meta(
+        db.save_case_from_result(
             example_name=example_name,
             run_group=run_group,
             case_key=case_key,
-            solver_meta=runner.last_meta,
+            result=runner.last_result,
             meta={
                 "n": int(n),
                 "dt": float(dt),

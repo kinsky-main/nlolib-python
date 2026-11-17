@@ -18,16 +18,10 @@ from backend.reference import (  # noqa: E402
     second_order_soliton_normalized_records,
     second_order_soliton_period,
 )
-from nlolib import (  # noqa: E402
-    NLOLIB_LOG_LEVEL_ERROR,
-    NLOLIB_LOG_LEVEL_WARN,
-    VECTOR_BACKEND_AUTO,
-    VECTOR_BACKEND_CPU,
-    NLolib,
-    RuntimeOperators,
-    default_execution_options,
-    prepare_sim_config,
-)
+import nlolib  # noqa: E402
+
+CPU = nlolib.ExecutionOptions(backend_type="cpu")
+AUTO = nlolib.ExecutionOptions(backend_type="auto")
 
 
 def _omega_grid_unshifted(n: int, dt: float) -> list[float]:
@@ -69,25 +63,26 @@ def _relative_l2_error(prediction: np.ndarray, reference: np.ndarray) -> float:
     return float(np.linalg.norm(pred - ref)) / max(float(np.linalg.norm(ref)), 1e-15)
 
 
-def _auto_backend_resolves_to_vulkan(api: NLolib) -> bool:
+def _auto_backend_resolves_to_vulkan() -> bool:
     n = 32
-    cfg = prepare_sim_config(
-        n,
-        propagation_distance=0.0,
+    nlolib.set_log_level("info")
+    nlolib.set_log_buffer(64 * 1024)
+    nlolib.clear_log_buffer()
+    nlolib.propagate(
+        nlolib.PulseSpec(samples=[0j] * n, delta_time=1.0 / float(n), pulse_period=1.0,
+                         frequency_grid=[0j] * n),
+        lambda A, w: 0.0,
+        lambda A, I: 0.0,
+        propagation_distance=0.01,
         starting_step_size=0.01,
         max_step_size=0.01,
         min_step_size=0.01,
         error_tolerance=1e-6,
-        pulse_period=1.0,
-        delta_time=1.0 / float(n),
-        frequency_grid=[0j] * n,
-        runtime=RuntimeOperators(constants=[0.0, 0.0, 0.0]),
+        num_records=1,
+        exec_options=AUTO,
     )
-    api.set_log_level(2)
-    api.set_log_buffer(64 * 1024)
-    api.clear_log_buffer()
-    api.propagate(cfg, [0j] * n, 1, default_execution_options(VECTOR_BACKEND_AUTO))
-    logs = api.read_log_buffer(consume=True, max_bytes=64 * 1024)
+    logs = nlolib.read_log_buffer(consume=True, max_bytes=64 * 1024)
+    nlolib.set_log_level("error")
     return "actual: VULKAN" in logs
 
 
@@ -148,7 +143,7 @@ def test_second_order_reference_matches_known_recurrence_and_midperiod_compressi
     )
 
 
-def test_linear_reference_prefers_current_dispersion_sign(api: NLolib) -> None:
+def test_linear_reference_prefers_current_dispersion_sign() -> None:
     n = 256
     dt = 0.02
     z_final = 0.35
@@ -158,20 +153,20 @@ def test_linear_reference_prefers_current_dispersion_sign(api: NLolib) -> None:
     omega = np.asarray(_omega_grid_unshifted(n, dt), dtype=np.float64)
     field0 = (np.exp(-((t / 0.25) ** 2)) * np.exp((-1.0j) * 12.0 * t)).astype(np.complex128)
 
-    cfg = prepare_sim_config(
-        n,
-        propagation_distance=z_final,
-        starting_step_size=z_final / 8.0,
-        max_step_size=z_final / 8.0,
-        min_step_size=z_final / 8.0,
-        error_tolerance=1e-12,
-        pulse_period=float(n) * dt,
-        delta_time=dt,
-        frequency_grid=[complex(v, 0.0) for v in omega],
-        runtime=RuntimeOperators(constants=[c0, 0.0, 0.0]),
-    )
     final_field = np.asarray(
-        api.propagate(cfg, field0.tolist(), 2, default_execution_options(VECTOR_BACKEND_CPU)).records[1],
+        nlolib.propagate(
+            nlolib.PulseSpec(samples=field0.tolist(), delta_time=dt, pulse_period=float(n) * dt,
+                             frequency_grid=[complex(v, 0.0) for v in omega]),
+            lambda A, w: 1j * c0 * w * w,
+            lambda A, I: 0.0,
+            propagation_distance=z_final,
+            starting_step_size=z_final / 8.0,
+            max_step_size=z_final / 8.0,
+            min_step_size=z_final / 8.0,
+            error_tolerance=1e-12,
+            num_records=2,
+            exec_options=CPU,
+        ).records[1],
         dtype=np.complex128,
     )
     current_ref = exact_linear_temporal_final(field0, z_final, omega, c0)
@@ -186,56 +181,54 @@ def test_linear_reference_prefers_current_dispersion_sign(api: NLolib) -> None:
     )
 
 
-def test_zero_operator_identity_fixed_step_cpu_and_auto(api: NLolib) -> None:
+def test_zero_operator_identity_fixed_step_cpu_and_auto() -> None:
     n = 512
     dt = 0.01
     z_final = 0.2
     t = _centered_time_grid(n, dt)
     field0 = (np.exp(-((t / 0.30) ** 2)) * np.exp((-1.0j) * 5.0 * t)).astype(np.complex128)
 
-    cfg = prepare_sim_config(
-        n,
-        propagation_distance=z_final,
-        starting_step_size=z_final / 16.0,
-        max_step_size=z_final / 16.0,
-        min_step_size=z_final / 16.0,
-        error_tolerance=1.0e-12,
-        pulse_period=float(n) * dt,
-        delta_time=dt,
-        frequency_grid=[0j] * n,
-        runtime=RuntimeOperators(
-            dispersion_factor_fn=lambda A, w: 0.0,
-            nonlinear_fn=lambda A, I: 0.0,
-        ),
-    )
+    def identity(exec_options):
+        return nlolib.propagate(
+            nlolib.PulseSpec(samples=field0.tolist(), delta_time=dt, pulse_period=float(n) * dt,
+                             frequency_grid=[0j] * n),
+            lambda A, w: 0.0,
+            lambda A, I: 0.0,
+            propagation_distance=z_final,
+            starting_step_size=z_final / 16.0,
+            max_step_size=z_final / 16.0,
+            min_step_size=z_final / 16.0,
+            error_tolerance=1.0e-12,
+            num_records=2,
+            exec_options=exec_options,
+        ).records[1]
 
     cpu_final = np.asarray(
-        api.propagate(cfg, field0.tolist(), 2, default_execution_options(VECTOR_BACKEND_CPU)).records[1],
+        identity(CPU),
         dtype=np.complex128,
     )
     cpu_error = _relative_l2_error(cpu_final, field0)
     assert cpu_error <= 1.0e-12, f"CPU identity propagation drifted unexpectedly: {cpu_error}"
 
-    if not _auto_backend_resolves_to_vulkan(api):
+    if not _auto_backend_resolves_to_vulkan():
         print("test_zero_operator_identity_fixed_step_cpu_and_auto: AUTO did not resolve to Vulkan, skipping GPU branch.")
         return
 
     auto_final = np.asarray(
-        api.propagate(cfg, field0.tolist(), 2, default_execution_options(VECTOR_BACKEND_AUTO)).records[1],
+        identity(AUTO),
         dtype=np.complex128,
     )
     auto_error = _relative_l2_error(auto_final, field0)
     assert auto_error <= 5.0e-6, f"AUTO/Vulkan identity propagation drift exceeded diagnostic bound: {auto_error}"
 
 def main() -> None:
-    api = NLolib()
-    api.set_log_level(NLOLIB_LOG_LEVEL_ERROR)
+    nlolib.set_log_level("error")
 
     test_second_order_reference_matches_known_recurrence_and_midperiod_compression()
-    test_linear_reference_prefers_current_dispersion_sign(api)
-    test_zero_operator_identity_fixed_step_cpu_and_auto(api)
+    test_linear_reference_prefers_current_dispersion_sign()
+    test_zero_operator_identity_fixed_step_cpu_and_auto()
 
-    api.set_log_level(NLOLIB_LOG_LEVEL_WARN)
+    nlolib.set_log_level("warn")
     print("test_python_reference_benchmarks: reference benchmarks validated.")
 
 

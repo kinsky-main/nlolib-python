@@ -4,35 +4,30 @@ import nlolib
 
 
 def main() -> None:
-    api = nlolib.NLolib()
-    api.perf_profile_reset()
-    api.perf_profile_set_enabled(True)
-    assert api.perf_profile_is_enabled() is True
+    nlolib.perf_profile_reset()
+    nlolib.perf_profile_set_enabled(True)
+    assert nlolib.perf_profile_is_enabled() is True
 
     n = 64
     dt = 0.01
     omega = [complex(v, 0.0) for v in (2.0 * math.pi * i / (n * dt) for i in range(n))]
-    cfg = nlolib.prepare_sim_config(
-        n,
+    field0 = [complex(math.exp(-((idx - 0.5 * n) / 10.0) ** 2), 0.0) for idx in range(n)]
+    nlolib.propagate(
+        nlolib.PulseSpec(samples=field0, delta_time=dt, frequency_grid=omega),
+        lambda A, w: 1j * 0.02 * w * w,
+        lambda A, I: 1j * A * (0.01 * I),
         propagation_distance=0.02,
         starting_step_size=0.01,
         max_step_size=0.01,
         min_step_size=0.01,
         error_tolerance=1e-9,
-        pulse_period=float(n) * dt,
-        delta_time=dt,
-        frequency_grid=omega,
-        runtime=nlolib.RuntimeOperators(
-            linear_factor_fn=lambda A, wt: 1j * 0.02 * wt * wt,
-            nonlinear_fn=lambda A, I: 1j * A * (0.01 * I),
-        ),
+        num_records=1,
+        exec_options=nlolib.ExecutionOptions(backend_type="cpu"),
     )
-    field0 = [complex(math.exp(-((idx - 0.5 * n) / 10.0) ** 2), 0.0) for idx in range(n)]
-    exec_options = nlolib.default_execution_options(nlolib.NLO_VECTOR_BACKEND_CPU)
-    api.propagate(cfg, field0, 1, exec_options)
-    snapshot = api.perf_profile_read()
-    api.perf_profile_set_enabled(False)
+    snapshot = nlolib.perf_profile_read()
+    nlolib.perf_profile_set_enabled(False)
 
+    assert isinstance(snapshot, nlolib.PerfProfileSnapshot)
     assert snapshot.dispersion_ms >= 0.0
     assert snapshot.nonlinear_ms >= 0.0
     assert snapshot.dispersion_calls > 0

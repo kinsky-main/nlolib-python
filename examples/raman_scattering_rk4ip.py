@@ -19,6 +19,7 @@ from backend.plotting import (
     plot_two_curve_comparison,
 )
 from backend.runner import (
+    ExampleOperators,
     NloExampleRunner,
     SimulationOptions,
     TemporalSimulationConfig,
@@ -29,11 +30,6 @@ from backend.spectral import (
     omega_detuning_to_wavelength_nm,
 )
 from backend.storage import ExampleRunDB
-from nlolib import (
-    NONLINEAR_MODEL_EXPR,
-    NONLINEAR_MODEL_KERR_RAMAN,
-    RuntimeOperators,
-)
 
 
 def _spectral_centroid(freq_axis: np.ndarray, spectral_intensity: np.ndarray) -> np.ndarray:
@@ -284,18 +280,18 @@ def _run(args: argparse.Namespace) -> float:
         raman_records = np.asarray(loaded_raman.records, dtype=np.complex128)
     else:
         run_group = db.begin_group(example_name, args.run_group)
-        runtime_kerr = RuntimeOperators(
-            linear_factor_fn=lambda A, w: (1.0j * (0.5 * beta2)) * (w * w),
-            nonlinear_fn=lambda A, I: (1.0j * gamma) * A * I,
-            nonlinear_model=NONLINEAR_MODEL_EXPR,
+        runtime_kerr = ExampleOperators(
+            linear_operator=lambda A, w: (1.0j * (0.5 * beta2)) * (w * w),
+            nonlinear_operator=lambda A, I: (1.0j * gamma) * A * I,
+            nonlinear_model="expr",
             nonlinear_gamma=gamma,
             raman_fraction=0.0,
             shock_omega0=0.0,
         )
-        runtime_raman = RuntimeOperators(
-            linear_factor_fn=lambda A, w: (1.0j * (0.5 * beta2)) * (w * w),
-            nonlinear_fn=lambda A, I: 0.0,
-            nonlinear_model=NONLINEAR_MODEL_KERR_RAMAN,
+        runtime_raman = ExampleOperators(
+            linear_operator=lambda A, w: (1.0j * (0.5 * beta2)) * (w * w),
+            nonlinear_operator=lambda A, I: 0.0,
+            nonlinear_model="kerr_raman",
             nonlinear_gamma=gamma,
             raman_fraction=f_r,
             raman_tau1=tau1,
@@ -349,11 +345,11 @@ def _run(args: argparse.Namespace) -> float:
             exec_options=exec_options,
             storage_kwargs=storage_kerr,
         )
-        db.save_case_from_solver_meta(
+        db.save_case_from_result(
             example_name=example_name,
             run_group=run_group,
             case_key=kerr_case_key,
-            solver_meta=runner.last_meta,
+            result=runner.last_result,
             meta={
                 "n": int(n),
                 "dt": float(dt),
@@ -380,11 +376,11 @@ def _run(args: argparse.Namespace) -> float:
         )
         if z_axis.shape != z_axis_raman.shape or not np.allclose(z_axis, z_axis_raman):
             raise RuntimeError("solver returned inconsistent z-axis between Kerr and Raman runs.")
-        db.save_case_from_solver_meta(
+        db.save_case_from_result(
             example_name=example_name,
             run_group=run_group,
             case_key=raman_case_key,
-            solver_meta=runner.last_meta,
+            result=runner.last_result,
             meta={
                 "n": int(n),
                 "dt": float(dt),

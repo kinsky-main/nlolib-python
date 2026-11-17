@@ -37,36 +37,21 @@ def _run(args: argparse.Namespace) -> None:
             delta_time=dt,
             pulse_period=n * dt,
         )
-        linear_operator = nlolib.OperatorSpec(
-            fn=lambda A, w: (1.0j * scale) * (w * w),
-        )
-        nonlinear_operator = nlolib.OperatorSpec(
-            fn=lambda A, I: (1.0j * 0.0) * I,
-        )
-        exec_options = nlolib.default_execution_options(
-            backend_type=nlolib.VECTOR_BACKEND_AUTO,
-            fft_backend=nlolib.FFT_BACKEND_VKFFT,
-        )
         storage_kwargs = db.storage_kwargs(
             example_name=example_name,
             run_group=run_group,
             case_key=case_key,
             chunk_records=2,
         )
-        t_eval = [float(v) for v in np.linspace(0.0, float(z_final), 2)]
         result = nlolib.propagate(
             pulse,
-            linear_operator,
-            nonlinear_operator,
+            lambda A, w: (1.0j * scale) * (w * w),
+            lambda A, I: (1.0j * 0.0) * I,
             propagation_distance=z_final,
-            t_eval=t_eval,
-            rtol=1e-7,
-            exec_options=exec_options,
-            sqlite_path=storage_kwargs["sqlite_path"],
-            run_id=storage_kwargs["run_id"],
-            chunk_records=storage_kwargs["chunk_records"],
-            sqlite_max_bytes=storage_kwargs["sqlite_max_bytes"],
-            log_final_output_field_to_db=storage_kwargs["log_final_output_field_to_db"],
+            num_records=2,
+            error_tolerance=1e-7,
+            exec_options=nlolib.ExecutionOptions(backend_type="auto", fft_backend="vkfft"),
+            **storage_kwargs,
         )
         z_records = np.asarray(result.z_axis, dtype=np.float64)
         records = np.asarray(result.records, dtype=np.complex128)
@@ -74,7 +59,7 @@ def _run(args: argparse.Namespace) -> None:
             example_name=example_name,
             run_group=run_group,
             case_key=case_key,
-            run_id=str(result.meta["storage_result"]["run_id"]),
+            run_id=result.storage_result.run_id,
             meta={},
         )
 
