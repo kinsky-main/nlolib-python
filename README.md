@@ -73,10 +73,14 @@ enum-style value is a lowercase string.
 ## Examples
 
 The [`examples/`](https://github.com/kinsky-main/nlolib-python/tree/main/examples)
-directory of the source repository holds runnable scripts: soliton and
-self-phase-modulation validation, Raman scattering, GRIN-fibre propagation,
-runtime-callable operators, and SQLite snapshot storage. They need the extra
-packages in `examples/requirements.txt`.
+directory of the source repository holds the example set shared with the
+MATLAB and Julia bindings -- `quickstart`, `linear_drift`, `spm`,
+`second_order_soliton`, `conservation_checks`, `raman_scattering`,
+`tensor_dispersion_3d`, `transverse_grin_beam`, `spatiotemporal_kerr_bullet`,
+`grin_soliton_fission`, `high_order_grin_soliton` and `sqlite_storage` -- each
+with its numbers in one parameter block at the top. `tensor_backend_scaling*`,
+`fixed_step_soliton_convergence` and `two_mode_linear_beating` are on-demand
+extras. They need the extra packages in `examples/requirements.txt`.
 
 ## Links
 

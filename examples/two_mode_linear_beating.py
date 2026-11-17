@@ -40,7 +40,7 @@ def _configure_runtime_logging() -> None:
 def _run(args: argparse.Namespace) -> float:
     _configure_runtime_logging()
     db = ExampleRunDB(args.db_path)
-    example_name = "two_mode_linear_beating_rk4ip"
+    example_name = "two_mode_linear_beating"
     case_key = "default"
 
     if args.replot:

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 from backend.app_base import ExampleAppBase
-from backend.metrics import relative_l2_intensity_error
+from backend.metrics import relative_l2_intensity_error, report_metric
 from backend.plotting import (
     plot_intensity_colormap_vs_propagation,
     plot_phase_shift_comparison,
@@ -25,6 +25,16 @@ from backend.runner import (
     centered_time_grid,
 )
 from backend.storage import ExampleRunDB
+
+# nlolib-example-parameters: begin
+n = 1024
+dt = 0.01
+pulse_width = 0.2
+beta2 = 0.0
+gamma = 80.0
+z_final = 0.5
+num_records = 100
+# nlolib-example-parameters: end
 
 
 def _configure_runtime_logging(runner: NloExampleRunner) -> None:
@@ -47,14 +57,9 @@ def _relative_l2_error(num: np.ndarray, ref: np.ndarray) -> float:
 
 def _run(args: argparse.Namespace) -> float:
     db = ExampleRunDB(args.db_path)
-    example_name = "spm_rk4ip"
+    example_name = "spm"
     case_key = "default"
 
-    n = 2**10
-    dt = 0.01
-    gamma = 80.0
-    z_final = 0.5
-    pulse_width = 0.2
     t = centered_time_grid(n, dt)
     # Purely temporal Gaussian pulse.
     a0 = np.exp(-((t / pulse_width) ** 2)).astype(np.complex128)
@@ -67,32 +72,20 @@ def _run(args: argparse.Namespace) -> float:
     if args.replot:
         run_group = db.resolve_replot_group(example_name, args.run_group)
         loaded = db.load_case(example_name=example_name, run_group=run_group, case_key=case_key)
-        meta = loaded.meta
-        n = int(meta["n"])
-        dt = float(meta["dt"])
-        gamma = float(meta["gamma"])
-        z_final = float(meta["z_final"])
-        pulse_width = float(meta["pulse_width"])
-        t = centered_time_grid(n, dt)
-        a0 = np.exp(-((t / pulse_width) ** 2)).astype(np.complex128)
         records = np.asarray(loaded.records, dtype=np.complex128)
         z_axis = np.asarray(loaded.z_axis, dtype=np.float64)
     else:
         run_group = db.begin_group(example_name, args.run_group)
         sim_cfg = TemporalSimulationConfig(
             gamma=gamma,
-            beta2=0.0,
+            beta2=beta2,
             alpha=0.0,
             dt=dt,
             z_final=z_final,
             num_time_samples=n,
             pulse_period=n * dt,
             omega=omega,
-            starting_step_size=1e-3,
-            max_step_size=1e-3,
-            min_step_size=1e-3,
-            error_tolerance=1e-6,
-            honor_solver_controls=True,
+            preset="accuracy",
         )
         storage_kwargs = db.storage_kwargs(
             example_name=example_name,
@@ -103,7 +96,7 @@ def _run(args: argparse.Namespace) -> float:
         z_records, a_records = runner.propagate_temporal_records(
             a0,
             sim_cfg,
-            num_records=100,
+            num_records=num_records,
             exec_options=exec_options,
             **storage_kwargs,
         )
@@ -197,8 +190,8 @@ def _run(args: argparse.Namespace) -> float:
         saved.append(p4)
 
     print(f"SPM analytical validation summary (run_group={run_group}):")
-    print(f"  final mean pointwise abs-relative error = {final_error:.6e}")
-    print(f"  relative power drift    = {power_drift:.6e}")
+    report_metric("final mean pointwise relative error", final_error)
+    report_metric("power drift", power_drift)
     print(f"  max wrapped phase error (all samples)     = {max_wrapped_phase_error:.6e}")
     print(f"  max wrapped phase error (pulse support)   = {max_wrapped_phase_error_support:.6e}")
     print(f"  rms wrapped phase error (pulse support)   = {rms_wrapped_phase_error_support:.6e}")

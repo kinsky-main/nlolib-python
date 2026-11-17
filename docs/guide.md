@@ -95,14 +95,14 @@ After a core build with this binding checked out (see
 python -m pip install -r examples\requirements.txt
 $env:PYTHONPATH="$PWD"
 $env:NLOLIB_LIBRARY="$PWD/Release/nlolib.dll"
-python examples/second_order_soliton_rk4ip.py
+python examples/second_order_soliton.py
 ```
 
 ```bash
 python3 -m pip install -r examples/requirements.txt
 export PYTHONPATH="$PWD"
 export NLOLIB_LIBRARY="$PWD/libnlolib.so"
-python3 examples/second_order_soliton_rk4ip.py
+python3 examples/second_order_soliton.py
 ```
 
 ## Related Reference

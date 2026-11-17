@@ -53,12 +53,12 @@ def test_runtime_plot_helpers() -> None:
         sys.path.insert(0, str(examples_dir))
 
     benchmark = _load_module(
-        "tensor_backend_scaling_rk4ip",
-        examples_dir / "tensor_backend_scaling_rk4ip.py",
+        "tensor_backend_scaling",
+        examples_dir / "tensor_backend_scaling.py",
     )
     nlolib_benchmark = _load_module(
-        "tensor_backend_scaling_nlolib_rk4ip",
-        examples_dir / "tensor_backend_scaling_nlolib_rk4ip.py",
+        "tensor_backend_scaling_nlolib",
+        examples_dir / "tensor_backend_scaling_nlolib.py",
     )
 
     rows = [

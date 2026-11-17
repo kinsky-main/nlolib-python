@@ -132,7 +132,7 @@ def _run(args) -> float:
     a0 = (math.sqrt(p0) / np.cosh(tau)).astype(np.complex128)
 
     db = ExampleRunDB(args.db_path)
-    example_name = "fixed_step_soliton_convergence_rk4ip"
+    example_name = "fixed_step_soliton_convergence"
 
     target_records = 2
 

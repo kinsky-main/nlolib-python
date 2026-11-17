@@ -1,5 +1,8 @@
 """
-Demonstrate SQLite-backed snapshot chunking for large record counts.
+Stream records to a SQLite database instead of returning them.
+
+The one shared example that sets return_records=False: the records go to the
+snapshot store in chunks of chunk_records, and are read back from it.
 """
 
 from __future__ import annotations
@@ -20,11 +23,22 @@ if str(PYTHON_API_DIR) not in sys.path:
     sys.path.insert(0, str(PYTHON_API_DIR))
 
 import nlolib
+from backend.metrics import report_metric
+
+# nlolib-example-parameters: begin
+nt = 128
+dt = 0.0078125
+pulse_period = 1.0
+z_final = 0.2
+num_records = 24
+chunk_records = 6
+sqlite_max_bytes = 53687091200
+# nlolib-example-parameters: end
 
 
 def _run(args: argparse.Namespace) -> None:
     db = ExampleRunDB(args.db_path)
-    example_name = "sqlite_snapshot_chunking_demo"
+    example_name = "sqlite_storage"
     case_key = "default"
 
     if not nlolib.storage_is_available():
@@ -33,16 +47,14 @@ def _run(args: argparse.Namespace) -> None:
             "Reconfigure/build with SQLite available."
         )
 
-    nt = 128
-    num_records = 24
-    t = [((i - (nt / 2.0)) / 16.0) for i in range(nt)]
+    t = [(i - (nt / 2.0)) * dt * 8.0 for i in range(nt)]
     field0 = [complex(math.exp(-(u * u)), 0.0) for u in t]
     freq = [complex(i, 0.0) for i in range(nt)]
 
     pulse = nlolib.PulseSpec(
         samples=field0,
-        delta_time=1.0 / nt,
-        pulse_period=1.0,
+        delta_time=dt,
+        pulse_period=pulse_period,
         frequency_grid=freq,
     )
 
@@ -59,16 +71,18 @@ def _run(args: argparse.Namespace) -> None:
             example_name=example_name,
             run_group=run_group,
             case_key=case_key,
-            chunk_records=6,
-            sqlite_max_bytes=50 * 1024 * 1024 * 1024,
+            chunk_records=chunk_records,
+            sqlite_max_bytes=sqlite_max_bytes,
         )
         result = nlolib.propagate(
             pulse,
             lambda A, w: 0.0,
             lambda A, I: 0.0,
-            propagation_distance=0.2,
-            num_records=int(num_records),
+            propagation_distance=z_final,
+            num_records=num_records,
+            preset="balanced",
             return_records=False,
+            exec_options=nlolib.ExecutionOptions(backend_type="auto"),
             **storage_kwargs,
         )
         storage_result = result.storage_result
@@ -91,6 +105,9 @@ def _run(args: argparse.Namespace) -> None:
             f"truncated={int(storage_result.truncated)} "
             f"db_size_bytes={storage_result.db_size_bytes}"
         )
+        report_metric("records captured", storage_result.records_captured)
+        report_metric("chunks written", storage_result.chunks_written)
+        report_metric("db size bytes", storage_result.db_size_bytes)
 
     with closing(sqlite3.connect(db.db_path)) as con:
         cur = con.cursor()
@@ -116,7 +133,7 @@ def _run(args: argparse.Namespace) -> None:
 
 
 class SqliteSnapshotChunkingDemoApp(ExampleAppBase):
-    example_slug = "sqlite_snapshot_chunking_demo"
+    example_slug = "sqlite_storage"
     description = "SQLite snapshot chunking demo with DB-backed run/replot."
 
     def run(self) -> None:

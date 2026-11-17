@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 from backend.app_base import ExampleAppBase
-from backend.metrics import relative_l2_intensity_error_curve
+from backend.metrics import relative_l2_intensity_error_curve, report_metric
 from backend.plotting import (
     plot_final_intensity_comparison,
     plot_final_re_im_comparison,
@@ -28,6 +28,17 @@ from backend.runner import (
     centered_time_grid,
 )
 from backend.storage import ExampleRunDB
+
+# nlolib-example-parameters: begin
+n = 1024
+dt = 0.01
+sigma = 0.2
+chirp = 12.0
+beta2 = 0.05
+gamma = 0.0
+z_final = 1.0
+num_records = 180
+# nlolib-example-parameters: end
 
 
 def gaussian_with_phase_ramp(t: np.ndarray, sigma: float, d: float) -> np.ndarray:
@@ -44,33 +55,18 @@ def centroid_curve(t: np.ndarray, records: np.ndarray) -> np.ndarray:
 
 def _run(args: argparse.Namespace) -> float:
     db = ExampleRunDB(args.db_path)
-    example_name = "linear_drift_rk4ip"
+    example_name = "linear_drift"
     case_key = "default"
 
-    num_samples = 1024
-    dt = 0.01
-    sigma = 0.20
-    beta2 = 0.05
-    gamma = 0.0
-    chirp = 12.0
-    z_final = 1.0
-    num_records = 180
+    num_samples = n
     t = centered_time_grid(num_samples, dt)
     field0 = gaussian_with_phase_ramp(t, sigma, chirp).astype(np.complex128)
 
-    exec_options = SimulationOptions(backend="cpu", fft_backend="fftw")
+    exec_options = SimulationOptions(backend="auto")
     runner = NloExampleRunner()
     if args.replot:
         run_group = db.resolve_replot_group(example_name, args.run_group)
         loaded = db.load_case(example_name=example_name, run_group=run_group, case_key=case_key)
-        meta = loaded.meta
-        num_samples = int(meta["num_samples"])
-        dt = float(meta["dt"])
-        sigma = float(meta["sigma"])
-        beta2 = float(meta["beta2"])
-        chirp = float(meta["chirp"])
-        t = centered_time_grid(num_samples, dt)
-        field0 = gaussian_with_phase_ramp(t, sigma, chirp).astype(np.complex128)
         z_records = np.asarray(loaded.z_axis, dtype=np.float64)
         records = np.asarray(loaded.records, dtype=np.complex128)
     else:
@@ -84,7 +80,7 @@ def _run(args: argparse.Namespace) -> float:
             num_time_samples=num_samples,
             pulse_period=float(num_samples) * dt,
             omega=None,
-            error_tolerance=1e-5,
+            preset="accuracy",
         )
         storage_kwargs = db.storage_kwargs(
             example_name=example_name,
@@ -189,7 +185,7 @@ def _run(args: argparse.Namespace) -> float:
     print(f"record norms: first={record_norms[0]:.6e}, last={record_norms[-1]:.6e}, min={np.min(record_norms):.6e}")
     print(f"centroid shift: z0={centroid_shift[0]:.6e}, z_end={centroid_shift[-1]:.6e}")
     print(f"slope (signed): measured={measured_slope:.6e}, predicted={predicted_slope:.6e}")
-    print(f"slope relative error: {slope_rel_error:.6e}")
+    report_metric("centroid slope relative error", slope_rel_error)
     print(f"centroid theory final shift: {theory_shift[-1]:.6e}")
 
     return slope_rel_error

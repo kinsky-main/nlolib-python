@@ -79,6 +79,18 @@ _PROPAGATE_SETTINGS = (
 )
 
 
+def _solver_settings(preset, starting_step_size, max_step_size, min_step_size, error_tolerance):
+    """propagate's solver keywords: the preset alone, or the explicit values."""
+    if preset is not None:
+        return {"preset": str(preset)}
+    return {
+        "starting_step_size": float(starting_step_size),
+        "max_step_size": float(max_step_size),
+        "min_step_size": float(min_step_size),
+        "error_tolerance": float(error_tolerance),
+    }
+
+
 @dataclass
 class TemporalSimulationConfig:
     """
@@ -102,6 +114,9 @@ class TemporalSimulationConfig:
     error_tolerance: float = 1e-8
     runtime: ExampleOperators | None = None
     honor_solver_controls: bool = False
+    #: A propagate preset ("fast", "balanced", "accuracy"). When set, the step
+    #: sizes and tolerance come from it and the explicit fields are ignored.
+    preset: str | None = None
 
     def resolved_pulse_period(self) -> float:
         if self.pulse_period is not None:
@@ -211,10 +226,13 @@ class NloExampleRunner:
             propagation_distance=float(sim_cfg.z_final),
             num_records=int(num_records),
             exec_options=opts,
-            starting_step_size=float(sim_cfg.starting_step_size),
-            max_step_size=float(sim_cfg.max_step_size),
-            min_step_size=float(sim_cfg.min_step_size),
-            error_tolerance=float(sim_cfg.error_tolerance),
+            **_solver_settings(
+                sim_cfg.preset,
+                sim_cfg.starting_step_size,
+                sim_cfg.max_step_size,
+                sim_cfg.min_step_size,
+                sim_cfg.error_tolerance,
+            ),
             capture_step_history=bool(capture_step_history),
             step_history_capacity=int(step_history_capacity) if capture_step_history else 200000,
             progress_callback=progress_callback,
@@ -246,6 +264,7 @@ class NloExampleRunner:
         runtime: ExampleOperators | None = None,
         exec_options: SimulationOptions | None = None,
         storage: Any | None = None,
+        preset: str | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         if num_records <= 0:
             raise ValueError("num_records must be positive.")
@@ -304,10 +323,7 @@ class NloExampleRunner:
             nonlinear_operator,
             propagation_distance=float(propagation_distance),
             num_records=int(num_records),
-            starting_step_size=float(starting_step_size),
-            max_step_size=float(max_step_size),
-            min_step_size=float(min_step_size),
-            error_tolerance=float(error_tolerance),
+            **_solver_settings(preset, starting_step_size, max_step_size, min_step_size, error_tolerance),
             exec_options=opts,
             storage=storage,
             **self._settings(runtime),

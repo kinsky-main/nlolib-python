@@ -8,7 +8,7 @@ An on-demand benchmark, not part of any routine run (ctest, CI or
 tools/run_examples.ps1). The defaults are a short sweep that finishes in a few
 minutes; the previous default, the full sweep, is
 
-    python examples/tensor_backend_scaling_nlolib_rk4ip.py \
+    python examples/tensor_backend_scaling_nlolib.py \
         --scales 16,18,22,26,31,36,43,51,60,71,83,98,116,137,162,192 \
         --warmup 4 --runs 6
 
@@ -22,7 +22,7 @@ import numpy as np
 
 from backend.app_base import ExampleAppBase
 from backend.storage import ExampleRunDB
-from tensor_backend_scaling_rk4ip import (
+from tensor_backend_scaling import (
     BenchmarkRow,
     _NLOLIB_RUNTIME_PLOT_SPEC,
     _benchmark_nlolib_rows,

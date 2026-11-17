@@ -29,6 +29,7 @@ from backend.spectral import (
     omega_centroid_to_wavelength_nm,
     omega_detuning_to_wavelength_nm,
 )
+from backend.metrics import report_metric
 from backend.storage import ExampleRunDB
 
 
@@ -217,24 +218,29 @@ def _run_case(
     return np.asarray(z_axis, dtype=np.float64), np.asarray(records, dtype=np.complex128)
 
 
+# nlolib-example-parameters: begin
+n = 4096
+dt = 0.002
+beta2 = -0.01
+gamma = 1.4
+pulse_width = 0.08
+z_final = 0.4
+num_records = 80
+f_r = 0.18
+tau1 = 0.0522
+tau2 = 0.032
+shock_omega0 = 0.0
+error_tolerance = 2e-08
+# nlolib-example-parameters: end
+# Derived: step sizes z_final / 500, / 80 and / 20000.
+
+
 def _run(args: argparse.Namespace) -> float:
     db = ExampleRunDB(args.db_path)
-    example_name = "raman_scattering_rk4ip"
+    example_name = "raman_scattering"
     kerr_case_key = "kerr_only"
     raman_case_key = "kerr_raman_shock"
 
-    n = 2**12
-    dt = 0.02
-    beta2 = -0.01
-    gamma = 1.40
-    z_final = 0.70
-    pulse_width = 0.08
-    num_records = 80
-
-    f_r = 0.18 # TODO: Switch in fraction sign results in allocation failure in the solver.
-    tau1 = 0.0522
-    tau2 = 0.0320
-    shock_omega0 = 0.0 # TODO: Any shock results in inf values and solver failure.
     lambda0_nm = 1550.0
     diagnostic_mode = "fixed_step" if args.fixed_step_diagnostic else "adaptive"
 
@@ -243,7 +249,7 @@ def _run(args: argparse.Namespace) -> float:
     p0 = abs(beta2) / (gamma * pulse_width * pulse_width)
     ld = (pulse_width * pulse_width) / abs(beta2)
     field0 = (np.sqrt(p0) / np.cosh(t / pulse_width)).astype(np.complex128)
-    exec_options = SimulationOptions(backend="cpu", fft_backend="fftw")
+    exec_options = SimulationOptions(backend="auto")
     runner = NloExampleRunner()
 
     if args.replot:
@@ -255,16 +261,6 @@ def _run(args: argparse.Namespace) -> float:
         loaded_kerr = db.load_case(example_name=example_name, run_group=run_group, case_key=kerr_case_key)
         loaded_raman = db.load_case(example_name=example_name, run_group=run_group, case_key=raman_case_key)
         meta = loaded_raman.meta
-        n = int(meta["n"])
-        dt = float(meta["dt"])
-        beta2 = float(meta["beta2"])
-        gamma = float(meta["gamma"])
-        z_final = float(meta["z_final"])
-        pulse_width = float(meta["pulse_width"])
-        f_r = float(meta["f_r"])
-        tau1 = float(meta["tau1"])
-        tau2 = float(meta["tau2"])
-        shock_omega0 = float(meta["shock_omega0"])
         lambda0_nm = float(meta.get("lambda0_nm", 1550.0))
         diagnostic_mode = str(meta.get("diagnostic_mode", diagnostic_mode))
         t = centered_time_grid(n, dt)
@@ -319,7 +315,7 @@ def _run(args: argparse.Namespace) -> float:
             starting_step_size=starting_step_size,
             max_step_size=max_step_size,
             min_step_size=min_step_size,
-            error_tolerance=2e-6,
+            error_tolerance=error_tolerance,
             honor_solver_controls=True,
         )
         cfg_kerr = TemporalSimulationConfig(runtime=runtime_kerr, **base_cfg)
@@ -556,7 +552,7 @@ def _run(args: argparse.Namespace) -> float:
     print(f"  wavelength mapping reference      = {lambda0_nm:.3f} nm (time unit assumed: ps)")
     print(f"  Raman first moment T_R           = {t_r:.6e}")
     print(f"  centroid derivative rel. error   = {centroid_derivative_rel_error:.6e}")
-    print(f"  centroid curve rel. error        = {centroid_curve_rel_error:.6e}")
+    report_metric("centroid-curve relative error vs prediction", centroid_curve_rel_error)
     print(f"  max pointwise rel. error         = {float(np.max(centroid_pointwise_rel_error)):.6e}")
     print(f"  final centroid shift (raman-kerr)= {centroid_delta_final:.6e}")
     print(f"  predicted centroid shift         = {predicted_delta_final:.6e}")
