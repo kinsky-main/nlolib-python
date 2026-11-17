@@ -19,7 +19,8 @@ def test_package_surface() -> None:
     assert hasattr(nlolib, "PulseSpec")
     assert hasattr(nlolib, "OperatorSpec")
     assert hasattr(nlolib, "RuntimeOperators")
-    assert hasattr(nlolib, "translate_callable")
+    assert not hasattr(nlolib, "translate_callable")
+    assert importlib.util.find_spec("nlolib.translate") is None
     assert hasattr(nlolib.NLolib, "perf_profile_set_enabled")
     assert hasattr(nlolib.NLolib, "perf_profile_is_enabled")
     assert hasattr(nlolib.NLolib, "perf_profile_reset")

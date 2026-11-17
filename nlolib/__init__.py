@@ -81,7 +81,6 @@ from ._wrapper import (
     set_progress_stream,
     storage_is_available,
 )
-from .translate.runtime_expr import translate_callable
 
 
 def _detect_version() -> str:
@@ -177,7 +176,6 @@ __all__ = [
     "default_execution_options",
     "default_storage_options",
     "load",
-    "translate_callable",
     "propagate",
     "query_runtime_limits",
     "storage_is_available",

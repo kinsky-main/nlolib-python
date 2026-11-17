@@ -30,6 +30,7 @@ def _case_kerr1d(adaptive):
     n, dt = 1024, 0.01
     field = [complex(math.exp(-((t / 0.2) ** 2)), 0.0) for t in _centered(n, dt)]
     h = 1.0e-3
+    beta2, gamma, sat_quad, sat_den = -0.005, 80.0, 20.0, 0.5
     cfg = prepare_sim_config(
         n,
         propagation_distance=0.05,
@@ -41,10 +42,9 @@ def _case_kerr1d(adaptive):
         delta_time=dt,
         frequency_grid=_omega(n, dt),
         runtime=RuntimeOperators(
-            linear_factor_expr="i*c0*(w*w)",
-            linear_expr="exp(h*D)",
-            nonlinear_expr="i*A*(c1*I - c2*I*I)/(1.0 + c3*I)",
-            constants=[-0.005, 80.0, 20.0, 0.5],
+            dispersion_factor_fn=lambda A, w: 1j * beta2 * (w * w),
+            dispersion_fn=lambda A, D, h: math.exp(h * D),
+            nonlinear_fn=lambda A, I: 1j * A * (gamma * I - sat_quad * I * I) / (1.0 + sat_den * I),
         ),
     )
     return cfg, field
@@ -63,6 +63,7 @@ def _case_grin_tensor(adaptive):
             field.extend(complex(spatial * tv, 0.0) for tv in temporal)
             potential.extend([complex(1.5e-3 * (xv * xv + yv * yv), 0.0)] * nt)
     h = 2.0e-3
+    beta_t, beta_x, gamma, i_sat = -0.04, -0.08, 1.5, 4.0
     cfg = prepare_sim_config(
         nt * nxy * nxy,
         propagation_distance=0.02,
@@ -81,10 +82,9 @@ def _case_grin_tensor(adaptive):
         frequency_grid=_omega(nt, dt),
         potential_grid=potential,
         runtime=RuntimeOperators(
-            linear_factor_expr="i*(c0*(wt*wt) + c1*(kx*kx + ky*ky))",
-            linear_expr="exp(h*D)",
-            nonlinear_expr="i*A*(c2*(I/(1.0 + I/c3)) + V)",
-            constants=[-0.04, -0.08, 1.5, 4.0],
+            linear_factor_fn=lambda A, wt, kx, ky: 1j * (beta_t * (wt * wt) + beta_x * (kx * kx + ky * ky)),
+            linear_fn=lambda A, D, h: math.exp(h * D),
+            nonlinear_fn=lambda A, I, V: 1j * A * (gamma * (I / (1.0 + I / i_sat)) + V),
         ),
     )
     return cfg, field

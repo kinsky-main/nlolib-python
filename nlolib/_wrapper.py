@@ -21,15 +21,6 @@ def _api() -> NLolib:
     return _DEFAULT_API
 
 
-def _enforce_callable_operator(name: str, operator: OperatorSpec) -> None:
-    if not isinstance(operator, OperatorSpec):
-        raise TypeError(f"{name} must be an OperatorSpec")
-    if operator.fn is None:
-        raise ValueError(f"{name}.fn is required")
-    if operator.expr is not None:
-        raise ValueError(f"{name}.expr is not supported; use callable fn only")
-
-
 def _normalize_solver_aliases(kwargs: dict[str, Any]) -> dict[str, Any]:
     out = dict(kwargs)
     if "t_span" in out:
@@ -139,13 +130,15 @@ class PropagateResult:
 
 def propagate(
     pulse: PulseSpec,
-    linear_operator: OperatorSpec,
-    nonlinear_operator: OperatorSpec,
+    linear_operator: OperatorSpec | Callable[..., object],
+    nonlinear_operator: OperatorSpec | Callable[..., object],
     **kwargs: Any,
 ) -> PropagateResult:
-    """Propagate a pulse with deterministic solver semantics."""
-    _enforce_callable_operator("linear_operator", linear_operator)
-    _enforce_callable_operator("nonlinear_operator", nonlinear_operator)
+    """Propagate a pulse with deterministic solver semantics.
+
+    Each operator is a callable (or an `OperatorSpec` wrapping one with named
+    params); passing an expression string raises TypeError.
+    """
     options = _normalize_solver_aliases(kwargs)
     dense_output = bool(options.pop("dense_output", False))
     events = options.pop("events", None)

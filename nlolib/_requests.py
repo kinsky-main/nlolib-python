@@ -149,12 +149,18 @@ class PropagateRequestBuilder:
         if len(args) > 2:
             raise TypeError("high-level propagate accepts at most two positional operator args")
 
-        linear_operator = kwargs.pop("linear_operator", "gvd")
-        nonlinear_operator = kwargs.pop("nonlinear_operator", "kerr")
+        linear_operator = kwargs.pop("linear_operator", None)
+        nonlinear_operator = kwargs.pop("nonlinear_operator", None)
         if len(args) >= 1:
+            if linear_operator is not None:
+                raise TypeError("linear_operator provided in both args and kwargs")
             linear_operator = args[0]
         if len(args) >= 2:
+            if nonlinear_operator is not None:
+                raise TypeError("nonlinear_operator provided in both args and kwargs")
             nonlinear_operator = args[1]
+        if linear_operator is None or nonlinear_operator is None:
+            raise TypeError("high-level propagate requires linear_operator and nonlinear_operator callables")
 
         if "transverse_operator" in kwargs:
             raise TypeError(
@@ -198,7 +204,6 @@ class PropagateRequestBuilder:
         raman_tau2_override = kwargs.pop("raman_tau2", None)
         shock_omega0_override = kwargs.pop("shock_omega0", None)
         raman_response_time_override = kwargs.pop("raman_response_time", None)
-        constants_override = kwargs.pop("constants", None)
         constant_bindings_override = kwargs.pop("constant_bindings", None)
         auto_capture_constants_override = kwargs.pop("auto_capture_constants", None)
         if kwargs:
@@ -256,16 +261,8 @@ class PropagateRequestBuilder:
                 raise ValueError("t_eval must be non-empty when provided")
             num_records = len(explicit_record_z)
 
-        linear_expr, linear_fn, linear_constants, linear_bindings = _resolve_operator_spec(
-            "linear",
-            linear_operator,
-            0,
-        )
-        nonlinear_expr, nonlinear_fn, nonlinear_constants, nonlinear_bindings = _resolve_operator_spec(
-            "nonlinear",
-            nonlinear_operator,
-            len(linear_constants),
-        )
+        linear_fn, linear_bindings = _resolve_operator_spec("linear_operator", linear_operator)
+        nonlinear_fn, nonlinear_bindings = _resolve_operator_spec("nonlinear_operator", nonlinear_operator)
 
         binding_map: dict[str, float] = {}
         for source in (linear_bindings, nonlinear_bindings):
@@ -302,11 +299,8 @@ class PropagateRequestBuilder:
         )
 
         runtime = RuntimeOperators(
-            linear_factor_expr=linear_expr,
-            nonlinear_expr=nonlinear_expr,
-            linear_factor_fn=linear_fn,
-            nonlinear_fn=nonlinear_fn,
-            constants=[*linear_constants, *nonlinear_constants],
+            linear_factor_fn=linear_fn,  # type: ignore[arg-type]
+            nonlinear_fn=nonlinear_fn,  # type: ignore[arg-type]
             constant_bindings=binding_map if binding_map else None,
             auto_capture_constants=(not binding_map),
         )
@@ -324,8 +318,6 @@ class PropagateRequestBuilder:
             runtime.shock_omega0 = float(shock_omega0_override)
         if raman_response_time_override is not None:
             runtime.raman_response_time = raman_response_time_override  # type: ignore[assignment]
-        if constants_override is not None:
-            runtime.constants = constants_override  # type: ignore[assignment]
         if constant_bindings_override is not None:
             runtime.constant_bindings = constant_bindings_override  # type: ignore[assignment]
         if auto_capture_constants_override is not None:

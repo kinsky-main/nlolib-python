@@ -117,6 +117,9 @@ def _run_unsaturable_case(
         centered_spatial_grid(ny, dy),
         grin_strength,
     ).reshape(-1)
+    half_beta2 = 0.5 * float(beta2)
+    beta_t = float(beta_t)
+    gamma = float(gamma)
     cfg = nlo.prepare_sim_config(
         nt * nx * ny,
         propagation_distance=float(z_final),
@@ -135,10 +138,9 @@ def _run_unsaturable_case(
         frequency_grid=(2.0 * np.pi * np.fft.fftfreq(int(nt), d=float(dt))).astype(np.complex128).tolist(),
         potential_grid=potential.tolist(),
         runtime=nlo.RuntimeOperators(
-            linear_factor_expr="i*(c0*(wt*wt) + c1*(kx*kx + ky*ky))",
-            linear_expr="exp(h*D)",
-            nonlinear_expr="i*A*(c2*I + V)",
-            constants=[0.5 * float(beta2), float(beta_t), float(gamma)],
+            linear_factor_fn=lambda A, wt, kx, ky: 1j * (half_beta2 * (wt * wt) + beta_t * (kx * kx + ky * ky)),
+            linear_fn=lambda A, D, h: np.exp(h * D),
+            nonlinear_fn=lambda A, I, V: 1j * A * (gamma * I + V),
         ),
     )
     kwargs = dict(storage_kwargs or {})

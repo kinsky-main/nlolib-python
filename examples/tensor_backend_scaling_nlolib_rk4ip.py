@@ -3,6 +3,16 @@ Equal-point nlolib CPU vs GPU runtime benchmark.
 
 This keeps the tensor scaling benchmark focused on nlolib only, using the
 same tensor problem construction as the mixed MMTools comparison example.
+
+An on-demand benchmark, not part of any routine run (ctest, CI or
+tools/run_examples.ps1). The defaults are a short sweep that finishes in a few
+minutes; the previous default, the full sweep, is
+
+    python examples/tensor_backend_scaling_nlolib_rk4ip.py \
+        --scales 16,18,22,26,31,36,43,51,60,71,83,98,116,137,162,192 \
+        --warmup 4 --runs 6
+
+The exit status is non-zero when any benchmark point fails.
 """
 
 from __future__ import annotations
@@ -71,6 +81,9 @@ def _run(args: argparse.Namespace) -> float:
     _print_summary(rows)
     if plot_path is not None:
         print(f"saved plot: {plot_path}")
+    failed = [row for row in rows if row.status == "error"]
+    if failed and not args.replot:
+        raise SystemExit(f"{len(failed)} of {len(rows)} benchmark points failed; see {csv_path}")
     return 0.0
 
 
@@ -83,8 +96,9 @@ class TensorBackendScalingNlolibApp(ExampleAppBase):
         parser.add_argument(
             "--scales",
             type=_parse_int_csv,
-            default=np.geomspace(16, 192, num=16, dtype=int).tolist(),
-            help="Comma-separated default tensor scales with nt=2*scale and nx=ny=scale.",
+            default=np.geomspace(16, 96, num=6, dtype=int).tolist(),
+            help="Comma-separated tensor scales with nt=2*scale and nx=ny=scale "
+            "(default: a short sweep up to 96; the full sweep goes to 192).",
         )
         parser.add_argument(
             "--num-records",
@@ -92,8 +106,8 @@ class TensorBackendScalingNlolibApp(ExampleAppBase):
             default=1,
             help="Recorded snapshots per run. Use 1 to benchmark final-only output.",
         )
-        parser.add_argument("--warmup", type=int, default=4, help="Warmup runs per benchmark point.")
-        parser.add_argument("--runs", type=int, default=6, help="Measured runs per benchmark point.")
+        parser.add_argument("--warmup", type=int, default=1, help="Warmup runs per benchmark point.")
+        parser.add_argument("--runs", type=int, default=2, help="Measured runs per benchmark point.")
 
     def run(self) -> float:
         return _run(self.args)

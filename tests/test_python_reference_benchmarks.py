@@ -204,9 +204,8 @@ def test_zero_operator_identity_fixed_step_cpu_and_auto(api: NLolib) -> None:
         delta_time=dt,
         frequency_grid=[0j] * n,
         runtime=RuntimeOperators(
-            dispersion_factor_expr="0",
-            nonlinear_expr="0",
-            constants=[0.0, 0.0, 0.0, 0.0],
+            dispersion_factor_fn=lambda A, w: 0.0,
+            nonlinear_fn=lambda A, I: 0.0,
         ),
     )
 

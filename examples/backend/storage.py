@@ -6,10 +6,11 @@ import hashlib
 import json
 import sqlite3
 import sys
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import numpy as np
 
@@ -39,10 +40,16 @@ class ExampleRunDB:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.ensure_schema()
 
-    def _connect(self) -> sqlite3.Connection:
-        con = sqlite3.connect(self.db_path)
-        con.row_factory = sqlite3.Row
-        return con
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        # sqlite3's own context manager commits but never closes. The core
+        # writes this file too, with its own SQLite in WAL mode, and removes
+        # the -wal/-shm files when it closes; a Python handle left open across
+        # that sees the database as malformed on the next run.
+        with closing(sqlite3.connect(self.db_path)) as con:
+            con.row_factory = sqlite3.Row
+            with con:
+                yield con
 
     def ensure_schema(self) -> None:
         schema = (

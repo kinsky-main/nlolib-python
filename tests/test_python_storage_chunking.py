@@ -182,8 +182,8 @@ def _simulate_storage_facade_case(api: NLolib, db_path: Path) -> None:
     )
     result = api.propagate(
         pulse,
-        OperatorSpec(expr="0"),
-        OperatorSpec(expr="0"),
+        OperatorSpec(fn=lambda A, w: 0.0),
+        OperatorSpec(fn=lambda A, I: 0.0),
         propagation_distance=0.1,
         records=6,
         sqlite_path=str(db_path),

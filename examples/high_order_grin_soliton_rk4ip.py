@@ -280,6 +280,10 @@ def _run_case(
         centered_spatial_grid(ny, dy),
         grin_strength,
     ).reshape(-1)
+    half_beta2 = 0.5 * float(beta2)
+    beta_t = float(beta_t)
+    gamma = float(gamma)
+    saturation_intensity = float(saturation_intensity)
     cfg = nlo.prepare_sim_config(
         nt * nx * ny,
         propagation_distance=float(z_final),
@@ -298,10 +302,9 @@ def _run_case(
         frequency_grid=(2.0 * np.pi * np.fft.fftfreq(int(nt), d=float(dt))).astype(np.complex128).tolist(),
         potential_grid=potential.tolist(),
         runtime=nlo.RuntimeOperators(
-            linear_factor_expr="i*(c0*(wt*wt) + c1*(kx*kx + ky*ky))",
-            linear_expr="exp(h*D)",
-            nonlinear_expr="i*A*(c2*(I/(1.0 + I/c3)) + V)",
-            constants=[0.5 * float(beta2), float(beta_t), float(gamma), float(saturation_intensity)],
+            linear_factor_fn=lambda A, wt, kx, ky: 1j * (half_beta2 * (wt * wt) + beta_t * (kx * kx + ky * ky)),
+            linear_fn=lambda A, D, h: np.exp(h * D),
+            nonlinear_fn=lambda A, I, V: 1j * A * (gamma * (I / (1.0 + I / saturation_intensity)) + V),
         ),
     )
     kwargs = dict(storage_kwargs or {})

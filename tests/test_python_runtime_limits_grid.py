@@ -40,9 +40,8 @@ def _config(num_time_samples=N):
         delta_time=DT,
         frequency_grid=grid,
         runtime=nlolib.RuntimeOperators(
-            dispersion_factor_expr="i*c0*w*w",
-            nonlinear_expr="i*c1*A*I",
-            constants=[-0.01, 1.0],
+            dispersion_factor_fn=lambda A, w: 1j * -0.01 * w * w,
+            nonlinear_fn=lambda A, I: 1j * 1.0 * A * I,
         ),
     )
 

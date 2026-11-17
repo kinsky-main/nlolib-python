@@ -8,6 +8,7 @@ import argparse
 import math
 import sqlite3
 import sys
+from contextlib import closing
 from pathlib import Path
 
 import numpy as np
@@ -98,7 +99,7 @@ def _run(args: argparse.Namespace) -> None:
             f"db_size_bytes={storage_result.get('db_size_bytes', 0)}"
         )
 
-    with sqlite3.connect(db.db_path) as con:
+    with closing(sqlite3.connect(db.db_path)) as con:
         cur = con.cursor()
         run_rows = cur.execute("SELECT COUNT(*) FROM io_runs").fetchone()[0]
         chunk_rows = cur.execute("SELECT COUNT(*) FROM io_record_chunks").fetchone()[0]

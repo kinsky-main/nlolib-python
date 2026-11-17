@@ -231,12 +231,14 @@ class NLolib:
 
         propagate(
             pulse,
-            linear_operator="gvd",
-            nonlinear_operator="kerr",
+            linear_operator,     # callable or OperatorSpec, e.g. lambda A, w: 1j * beta2 * w * w
+            nonlinear_operator,  # callable or OperatorSpec, e.g. lambda A, I: 1j * gamma * A * I
             *,
             propagation_distance=...,
             ...
         )
+
+        Operators must be callables; expression strings raise TypeError.
         """
         if isinstance(primary, (PreparedSimConfig, NloSimulationConfig)):
             request = self._request_builder.from_config(primary, *args, **kwargs)

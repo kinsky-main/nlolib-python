@@ -17,39 +17,38 @@ https://kinsky-main.github.io/nlo-rk4ip-code/
 
 ## Quick start
 
+Operators are plain Python callables. This propagates a fundamental soliton of
+the nonlinear Schrödinger equation, which keeps its shape:
+
 ```python
+import math
 import nlolib
 
-limits = nlolib.query_runtime_limits()
-print(limits.max_num_time_samples_runtime)
+beta2 = -1.0  # group-velocity dispersion (anomalous)
+gamma = 1.0   # Kerr coefficient
 
-def linear(A, w):
-    return 0.0
+n, dt = 512, 0.05
+t = [(i - n // 2) * dt for i in range(n)]
+pulse = nlolib.PulseSpec(samples=[complex(1.0 / math.cosh(ti), 0.0) for ti in t], delta_time=dt)
 
-def nonlinear(A, I):
-    return 0.0
-
-pulse = nlolib.PulseSpec(samples=[0j] * 64, delta_time=0.01, pulse_period=0.64)
 result = nlolib.propagate(
     pulse,
-    nlolib.OperatorSpec(fn=linear),
-    nlolib.OperatorSpec(fn=nonlinear),
-    propagation_distance=0.1,
-    t_eval=[0.0, 0.05, 0.1],
+    lambda A, w: 1j * 0.5 * beta2 * w * w,  # linear operator D(w)
+    lambda A, I: 1j * gamma * A * I,        # nonlinear operator N(A), I = |A|^2
+    propagation_distance=2.0,
+    records=3,
 )
-print(result.status, result.message, len(result.records))
+print(result.z_axis)                      # [0.0, 1.0, 2.0]
+print(max(abs(a) for a in result.final))  # ~1.0
 ```
 
-Operators can also be given as expression strings with named constants. For
-the GLSE with dispersion `beta2`, loss `alpha` and Kerr coefficient `gamma`:
-
-```python
-runtime = nlolib.RuntimeOperators(
-    dispersion_factor_expr="i*c0*w*w-c1",
-    nonlinear_expr="i*c2*A*I",
-    constants=[0.5 * beta2, 0.5 * alpha, gamma],
-)
-```
+`result.records[k]` is the field at `result.z_axis[k]`. Each operator is a
+`lambda` or `def` whose body is a single expression. Its parameters name the
+symbols it uses: `A` field, `w` angular frequency, `I` intensity `|A|^2`, `V`
+potential, and `wt`/`kx`/`ky` for tensor runs. Free names are captured from the
+enclosing scope, or bound explicitly with
+`nlolib.OperatorSpec(fn=..., params={"beta2": -1.0})`. Expression strings are
+not accepted; passing one raises `TypeError`.
 
 ## CPU and GPU
 

@@ -13,11 +13,9 @@ D(\omega)=i\left(\frac{\beta_2}{2}\right)\omega^2-\frac{\alpha}{2},
 N(A)=i\gamma A|A|^2
 \f]
 
-so the runtime constants are
-
-- `c0 = beta2 / 2`
-- `c1 = alpha / 2`
-- `c2 = gamma`
+Each operator is written as a Python callable. Its parameter names select the
+runtime symbols (`A`, `w`, `I`, ...), and the scalars it uses are captured from
+the enclosing scope:
 
 ```python
 import nlolib
@@ -27,11 +25,14 @@ alpha = 0.10
 gamma = 1.20
 
 runtime = nlolib.RuntimeOperators(
-    dispersion_factor_expr="i*c0*w*w-c1",
-    nonlinear_expr="i*c2*A*I",
-    constants=[0.5 * beta2, 0.5 * alpha, gamma],
+    dispersion_factor_fn=lambda A, w: 1j * (0.5 * beta2) * w * w - 0.5 * alpha,
+    nonlinear_fn=lambda A, I: 1j * gamma * A * I,
 )
 ```
+
+The callables are lowered to the core's runtime operator language internally.
+Operator expression strings are not part of the Python API, and passing one
+raises `TypeError`.
 
 ## Public API Entry Points
 
@@ -41,7 +42,6 @@ runtime = nlolib.RuntimeOperators(
 - `nlolib.OperatorSpec`
 - `nlolib.propagate`
 - `nlolib.query_runtime_limits`
-- `nlolib.translate_callable`
 - `nlolib.perf_profile_read`, `nlolib.perf_profile_reset`,
   `nlolib.perf_profile_set_enabled`, `nlolib.perf_profile_is_enabled`
 - `nlolib.__version__` -- the package version, from the installed distribution
