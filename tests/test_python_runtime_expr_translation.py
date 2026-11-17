@@ -133,6 +133,26 @@ def test_rejects_disallowed_complex_literal():
     )
 
 
+def test_lambdas_sharing_a_line_lower_to_their_own_bodies():
+    # getsource returns the whole line; each lambda must lower to its own body.
+    ops = (lambda A, w: 1j * 2.0 * w * w, lambda A, I: 1j * 3.0 * A * I)  # noqa: E731
+    assert translate_callable(ops[0], RUNTIME_CONTEXT_DISPERSION_FACTOR).expression == "(((i*2)*w)*w)"
+    assert translate_callable(ops[1], RUNTIME_CONTEXT_NONLINEAR).expression == "(((i*3)*A)*I)"
+
+    def make(a, b):
+        return (lambda A, w: a * w, lambda A, w: b * w)  # noqa: E731
+
+    first, second = make(1.5, 2.5)
+    assert translate_callable(first, RUNTIME_CONTEXT_DISPERSION_FACTOR).constants == [1.5]
+    assert translate_callable(second, RUNTIME_CONTEXT_DISPERSION_FACTOR).constants == [2.5]
+
+    table = {
+        "linear": lambda A, w: 4.0 * w,  # noqa: E731
+        "nonlinear": lambda A, I: 5.0 * I,  # noqa: E731
+    }
+    assert translate_callable(table["nonlinear"], RUNTIME_CONTEXT_NONLINEAR).expression == "(5*I)"
+
+
 def main():
     test_numpy_functions_translate()
     test_math_functions_translate()
@@ -144,6 +164,7 @@ def main():
     test_rejects_unsupported_numpy_call()
     test_rejects_invalid_signature()
     test_rejects_disallowed_complex_literal()
+    test_lambdas_sharing_a_line_lower_to_their_own_bodies()
     print("test_python_runtime_expr_translation: callable translation coverage validated.")
 
 

@@ -96,19 +96,120 @@ def _resolve_attribute_chain(node: ast.Attribute, scope: Mapping[str, Any]) -> A
     return value
 
 
+def _lambda_names(node: ast.Lambda) -> tuple[tuple[str, ...], frozenset[str]]:
+    args = tuple(arg.arg for arg in node.args.posonlyargs + node.args.args)
+    names = {
+        n.id if isinstance(n, ast.Name) else n.attr
+        for n in ast.walk(node.body)
+        if isinstance(n, (ast.Name, ast.Attribute))
+    }
+    return args, frozenset(names - set(args))
+
+
+def _func_names(func: Callable[..., Any]) -> tuple[tuple[str, ...], frozenset[str]]:
+    code = func.__code__
+    args = tuple(code.co_varnames[: code.co_argcount])
+    return args, frozenset(set(code.co_names) | set(code.co_freevars))
+
+
+def _first_column(func: Callable[..., Any]) -> int | None:
+    """Column of the function's first instruction on its first line (3.11+)."""
+    positions = getattr(func.__code__, "co_positions", None)
+    if positions is None:
+        return None
+    first_line = func.__code__.co_firstlineno
+    # Skip the zero-width bookkeeping instructions (RESUME) at column 0.
+    columns = [
+        col for line, _, col, end_col in positions()
+        if line == first_line and col is not None and end_col is not None and end_col > col
+    ]
+    return min(columns) if columns else None
+
+
+def _matching_lambda(func: Callable[..., Any], lambdas: list[ast.Lambda], column_shift: int = 0) -> ast.Lambda:
+    """The lambda in `lambdas` that `func` was compiled from.
+
+    getsource returns whole lines, so a line holding several lambdas -- both
+    operators of one propagate call, say -- yields all of them; taking the first
+    would lower every one of them to the first one's body.
+    """
+    if len(lambdas) == 1:
+        return lambdas[0]
+    want = _func_names(func)
+    candidates = [node for node in lambdas if _lambda_names(node) == want] or list(lambdas)
+    if len(candidates) > 1:
+        column = _first_column(func)
+        if column is not None:
+            column -= column_shift
+            by_column = [
+                node for node in candidates
+                if node.col_offset <= column <= (node.end_col_offset or node.col_offset)
+            ]
+            if by_column:
+                # The innermost lambda that contains the first instruction.
+                candidates = [max(by_column, key=lambda node: node.col_offset)]
+    if len(candidates) > 1:
+        dumps = {ast.dump(node.body) for node in candidates}
+        if len(dumps) > 1:
+            raise ValueError(
+                "several lambdas on the operator's source line match it; "
+                "put each operator on a line of its own"
+            )
+    return candidates[0]
+
+
+def _lambdas_in_fragment(source: str) -> list[ast.Lambda]:
+    """Every lambda expression that parses starting at a `lambda` keyword."""
+    found: list[ast.Lambda] = []
+    start = source.find("lambda")
+    while start >= 0:
+        for end in range(len(source), start, -1):
+            try:
+                tree = ast.parse("(" + source[start:end] + ")", mode="eval")
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Lambda):
+                    # Offsets are into "(" + fragment; move them back to `source`.
+                    if node.lineno == 1:
+                        node.col_offset += start - 1
+                    if node.end_lineno == 1 and node.end_col_offset is not None:
+                        node.end_col_offset += start - 1
+                    found.append(node)
+            break
+        start = source.find("lambda", start + 1)
+    return found
+
+
 def _extract_expr_from_callable(func: Callable[..., Any]) -> ast.AST:
     try:
-        source = textwrap.dedent(inspect.getsource(func))
+        raw = inspect.getsource(func)
     except (OSError, TypeError) as exc:
         raise ValueError(
             "unable to inspect callable source; define the operator as a lambda or def in a source file"
         ) from exc
 
-    tree = ast.parse(source)
+    source = textwrap.dedent(raw)
+    # Columns in `source` are this much left of the columns in the file.
+    raw_first = raw.splitlines()[0] if raw else ""
+    source_first = source.splitlines()[0] if source else ""
+    column_shift = len(raw_first) - len(source_first)
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        # getsource returns whole lines, so a lambda in a dict entry or a
+        # one-line compound statement comes back as a fragment that does not
+        # parse on its own; parse the expression at each `lambda` instead.
+        lambdas = _lambdas_in_fragment(source)
+        if not lambdas:
+            raise ValueError(
+                "could not parse the operator's source line; define it on a line of its own"
+            ) from None
+        return _matching_lambda(func, lambdas, column_shift).body
 
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Lambda):
-            return node.body
+    lambdas = [node for node in ast.walk(tree) if isinstance(node, ast.Lambda)]
+    if lambdas:
+        return _matching_lambda(func, lambdas, column_shift).body
 
     fn_name = getattr(func, "__name__", None)
     for node in tree.body:
