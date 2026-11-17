@@ -1,3 +1,4 @@
+import ctypes
 import math
 import sqlite3
 import sys
@@ -6,9 +7,6 @@ from pathlib import Path
 
 import nlolib
 from nlolib import ExecutionOptions, PulseSpec, StorageOptions, propagate
-from nlolib._executor import _DENSE_OUTPUT_MAX_BYTES, _COMPLEX_BYTES, PropagationExecutor
-from nlolib._binding import NloPhysicsConfig, NloSimulationConfig
-from nlolib._requests import _NormalizedPropagateRequest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -137,39 +135,35 @@ def _run_id_case(db_path: Path) -> None:
         assert "cap_policy" in str(exc)
 
 
-class _HugeInput:
-    def __len__(self) -> int:
-        return (_DENSE_OUTPUT_MAX_BYTES // _COMPLEX_BYTES) + 1
+def _in_memory_limit_case() -> None:
+    """One record above the core's in-memory capacity is the core's error.
 
-    def __iter__(self):
-        raise AssertionError("dense output validation should run before input conversion")
+    The binding has no limit of its own: the count comes from
+    query_runtime_limits for the same pulse, and propagate must refuse it with
+    status "invalid_argument". Available memory is pinned with the core's test
+    override so the limit is small and the same at query and propagate time;
+    on the real figure the buffer for max + 1 records would be most of RAM.
+    """
+    from nlolib import _api
 
-
-def _dense_output_guard_case() -> None:
-    executor = PropagationExecutor(object(), lambda: True)
-    request = _NormalizedPropagateRequest(
-        sim_cfg=NloSimulationConfig(),
-        phys_cfg=NloPhysicsConfig(),
-        keepalive=[],
-        input_seq=_HugeInput(),  # type: ignore[arg-type]
-        num_records=1,
-        exec_options=None,
-        storage=StorageOptions(sqlite_path="guard.db"),
-        return_records=True,
-        capture_step_history=False,
-        step_history_capacity=0,
-        record_z=None,
-        progress_callback=None,
-        meta_overrides={},
-    )
-
+    override = _api._lib().set_available_system_memory_override_bytes
+    override.argtypes = [ctypes.c_size_t]
+    override.restype = None
+    override(16 * 1024 * 1024)
     try:
-        executor.execute(request)
-        raise AssertionError("expected dense output guard to reject oversized request")
-    except ValueError as exc:
-        message = str(exc)
-        assert "return_records=False" in message
-        assert "SQLite storage" in message
+        pulse = _gaussian_pulse(64, 10.0)
+        limits = nlolib.query_runtime_limits(pulse=pulse, exec_options=CPU)
+        in_memory = int(limits.max_num_recorded_samples_in_memory)
+        assert 0 < in_memory < 1_000_000, in_memory
+        within = _propagate(pulse, in_memory, exec_options=CPU, return_records=True)
+        assert int(within.meta["records_requested"]) == in_memory
+        try:
+            _propagate(pulse, in_memory + 1, exec_options=CPU, return_records=True)
+            raise AssertionError(f"expected {in_memory + 1} in-memory records to be refused")
+        except nlolib.NlolibError as exc:
+            assert exc.status == "invalid_argument", exc.status
+    finally:
+        override(0)
 
 
 def _example_db_tensor_reload_case(db_path: Path) -> None:
@@ -249,7 +243,7 @@ def main() -> None:
     _cap_case(tmp / "cap.db")
     _final_output_logging_case(tmp / "final_output.db")
     _run_id_case(tmp / "run_id.db")
-    _dense_output_guard_case()
+    _in_memory_limit_case()
     _example_db_tensor_reload_case(tmp / "example_tensor.db")
     _small_dense_return_case()
     print("test_python_storage_chunking: passed")

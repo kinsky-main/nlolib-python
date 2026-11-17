@@ -44,10 +44,10 @@ jobs:
           ref: ${{ steps.core.outputs.ref }}
           path: core
 
-      # Source-only: the C API constants this binding re-declares must agree
-      # with the core's canonical list.
-      - name: Check the binding API constants
-        run: python3 core/tools/check_api_parity.py --bindings python --python-dir .
+      # Source-only: the public surface must match the core's shared binding
+      # manifest (tests/api_surface.json) exactly, examples included.
+      - name: Check the binding API surface
+        run: python3 core/tools/check_api_parity.py --bindings python --python-dir . --surface enforce
 
       - name: Install Vulkan loader and glslang
         run: |

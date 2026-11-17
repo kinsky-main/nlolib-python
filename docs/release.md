@@ -152,8 +152,8 @@ The workflow then runs:
 - **verify** — `tools/check_version.py`, which fails if the tag name is not
   the version in `pyproject.toml`: the wheel filename carries that version, so
   a mismatch would publish something the tag does not describe. It then checks
-  out the core at `CORE_REF` and runs the core's SBOM and API-constant checks
-  against this package.
+  out the core at `CORE_REF` and runs the core's SBOM check and its API
+  surface check (`--surface enforce`) against this package.
 - **build** (per platform) — installs the Vulkan loader and glslang, pins the
   Visual Studio 2022 toolchain on Windows, runs the `build_wheel_*` script,
   then refuses any wheel tagged `-any` or carrying an unpublishable platform

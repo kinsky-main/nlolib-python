@@ -65,7 +65,6 @@ def _c_storage_options(storage: StorageOptions, keepalive: list[object]) -> NloS
     return out
 
 
-_DENSE_OUTPUT_MAX_BYTES = 2 * 1024 * 1024 * 1024
 _COMPLEX_BYTES = ctypes.sizeof(NloComplex)
 
 
@@ -81,20 +80,9 @@ class PropagationExecutor:
         sim_ptr = ctypes.pointer(request.sim_cfg)
         phys_ptr = ctypes.pointer(request.phys_cfg)
         n = len(request.input_seq)
-        if request.return_records:
-            dense_output_bytes = n * request.num_records * _COMPLEX_BYTES
-            if dense_output_bytes > _DENSE_OUTPUT_MAX_BYTES:
-                if request.storage is not None:
-                    raise ValueError(
-                        "dense output request requires "
-                        f"{dense_output_bytes} bytes, above the {_DENSE_OUTPUT_MAX_BYTES} byte safety cap; "
-                        "use return_records=False with SQLite storage for large recorded outputs"
-                    )
-                raise ValueError(
-                    "dense output request requires "
-                    f"{dense_output_bytes} bytes, above the {_DENSE_OUTPUT_MAX_BYTES} byte safety cap; "
-                    "enable SQLite storage or request fewer records/samples"
-                )
+        # The in-memory record limit is the core's: the output buffer below is
+        # allocated zero-filled and lazily, and nlolib_propagate refuses a count
+        # above max_num_recorded_samples_in_memory before writing to it.
         in_arr = make_complex_array(request.input_seq)
         out_arr = make_complex_array(n * request.num_records) if request.return_records else None
         record_z_arr = None
