@@ -88,6 +88,7 @@ extras. They need the extra packages in `examples/requirements.txt`.
 
 - Source and issues: https://github.com/kinsky-main/nlolib-python
 - Core C library: https://github.com/kinsky-main/nlo-rk4ip-code
+- Upgrading from 1.x: [docs/guide.md](https://github.com/kinsky-main/nlolib-python/blob/main/docs/guide.md#upgrading-from-1x)
 - Working on the package itself: [docs/development.md](https://github.com/kinsky-main/nlolib-python/blob/main/docs/development.md)
 
 ## License
