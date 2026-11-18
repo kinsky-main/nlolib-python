@@ -70,6 +70,57 @@ loaded build lacks; `.status` is the status string) and
 `nlolib.__version__` is the package version, from the installed distribution
 metadata or, in a source checkout, from `pyproject.toml`.
 
+## Upgrading from 1.x
+
+2.0.0 moves the package to the API shared with the MATLAB and Julia bindings.
+It is not backwards compatible.
+
+- Operators are Python functions only. A string expression raises
+  `TypeError`. Free names in the body are captured as constants;
+  `constant_bindings` names values explicitly.
+- There is one package-level `nlolib.propagate(pulse, linear_operator,
+  nonlinear_operator, ...)` and no client class. `nlolib.load(path)` selects a
+  specific shared library.
+- Enum-style values are lowercase strings (`backend_type="vulkan"`,
+  `cap_policy="fail"`, `level="debug"`, `meta["status"] == "ok"`). The integer
+  constants are gone.
+- `num_records` sets how many evenly spaced records come back, and `record_z`
+  gives explicit positions. A `record_z` with one position returns the field at
+  that position. `result.final` is the last returned record, `records[-1]`.
+- The in-memory record limit is no longer a fixed 2 GiB check in the binding.
+  The core derives it from the memory available on the host;
+  `query_runtime_limits(pulse=pulse).max_num_recorded_samples_in_memory` reports it,
+  and a run above it raises `NlolibError` with status `"invalid_argument"`.
+  Give `storage=StorageOptions(...)` to record more.
+
+| 1.x | 2.0.0 |
+|---|---|
+| `NLolib()` and its methods, `NLolib.set_log_file` | package functions: `nlolib.propagate`, `nlolib.set_log_file`, ... |
+| `records=`, `num_recorded_samples=` | `num_records` |
+| `t_eval`, `explicit_record_z` | `record_z` |
+| `output`, `output_mode` | removed; `num_records` / `record_z` decide |
+| `linear_factor_fn`, `nonlinear_fn`, `potential_fn`, `linear_fn` | `linear_operator`, `nonlinear_operator`, `potential_operator`, `linear_step_operator` |
+| `dispersion_factor_fn`, `dispersion_fn` | removed; the run type picks the C context |
+| `auto_capture_constants`, raw `constants`, `OperatorSpec` | removed; pass the function, use `constant_bindings` |
+| `tensor_layout` | removed; the C API has one layout |
+| `t_span`, `first_step`, `max_step`, `min_step`, `rtol`, `dense_output`, `events` | removed |
+| `sqlite_path`, `run_id`, `sqlite_max_bytes`, `chunk_records`, `cap_policy`, `log_final_output_field_to_db` keywords | `storage=StorageOptions(...)` |
+| `PulseSpec` fields repeated as `propagate` keywords | set them on the pulse |
+| a dict, mapping or NamedTuple as `pulse` | `PulseSpec` |
+| `prepare_sim_config`, `PreparedSimConfig`, `RuntimeOperators`, the low-level `propagate` forms | private; `propagate` takes `potential_operator` and `linear_step_operator`, `PulseSpec` takes `wt_axis`, `kx_axis`, `ky_axis` |
+| `PropagateResult` (`status`, `message`, `t_events`, `y_events`, `sol`) | `PropagationResult`; status in `meta["status"]` |
+| `meta["step_history"]`, `meta["storage_result"]` | `result.step_history`, `result.storage_result` |
+| `meta` keys `output`, `records`, `message`, `storage_enabled`, `records_returned` | removed |
+| `query_runtime_limits(config, ...)` | `query_runtime_limits(pulse=..., exec_options=...)` |
+| `NloExecutionOptions`, `default_execution_options` | `ExecutionOptions` |
+| `NloStorageOptions`, `default_storage_options` | `StorageOptions` |
+| `NloRuntimeLimits`, `NloPerfProfileSnapshot`, `NloStorageResult` | `RuntimeLimits`, `PerfProfileSnapshot`, `StorageResult` |
+| `NloComplex`, `NloTensor3dDesc`, `NloVkBackendConfig`, `make_complex_array`, `complex_array_to_list` | private |
+| `NLO_VECTOR_BACKEND_*`, `NLO_FFT_BACKEND_*` and the other integer constants | lowercase strings |
+| `NT_MAX`, `STORAGE_RUN_ID_MAX` | `query_runtime_limits`; a `run_id` over 63 characters is a `ValueError` |
+| `RuntimeError` on a status failure | `NlolibError` (a `RuntimeError` subclass, with `.status`) |
+| (new) | `loaded_library_path`, `tensor_record_view`, `StepHistory` |
+
 ## Checking Whether the GPU JIT Ran
 
 On the Vulkan backend each operator program is compiled to a single GPU kernel
