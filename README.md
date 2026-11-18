@@ -42,7 +42,9 @@ print(result.z_axis)                      # [0.0, 1.0, 2.0]
 print(max(abs(a) for a in result.final))  # ~1.0
 ```
 
-`result.records[k]` is the field at `result.z_axis[k]`. Each operator is a
+`result.records[k]` is the field at `result.z_axis[k]`, and `result.final` is
+the last returned record, `result.records[-1]`: the field at the propagation
+distance unless `record_z` stops before it. Each operator is a
 `lambda` or `def` whose body is a single expression. Its parameters name the
 symbols it uses: `A` field, `w` angular frequency, `I` intensity `|A|^2`, `V`
 potential, and `kx`/`ky` for tensor runs. Free names are captured from the

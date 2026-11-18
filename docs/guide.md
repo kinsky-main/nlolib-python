@@ -40,6 +40,12 @@ result = nlolib.propagate(
 )
 ```
 
+`result.records[k]` is the field at `result.z_axis[k]`. With `record_z` the
+positions are exactly the ones given, for any length including one; otherwise
+they are `num_records` uniform positions from 0 to `propagation_distance`.
+`result.final` is the last returned record, `result.records[-1]`, which is the
+field at `propagation_distance` only when the last position is that distance.
+
 The callables are lowered once, at setup, to the core's runtime operator
 language. A temporal run lowers `linear_operator` to the core's dispersion
 factor and a tensor run (`tensor_nt`, `tensor_nx`, `tensor_ny` set on the

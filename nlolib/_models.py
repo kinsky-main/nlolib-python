@@ -97,6 +97,9 @@ class PropagationResult:
     """Result of `propagate`.
 
     ``records`` is a list of rows, one per recorded position in ``z_axis``.
+    ``final`` is the last returned record, ``records[-1]``: the field at
+    ``z_axis[-1]``, which is ``propagation_distance`` unless ``record_z``
+    ends before it. It is empty when ``return_records`` is False.
     ``step_history`` is None unless ``capture_step_history`` was set, and
     ``storage_result`` is None unless ``storage`` was given. ``meta`` holds
     ``preset``, ``records_requested``, ``records_written``,

@@ -112,9 +112,12 @@ def propagate(
     per-step linear operator (default ``exp(h*D)``) and `potential_operator`
     sets the potential of a tensor run.
 
-    Records: with `record_z`, exactly those positions; otherwise `num_records`
-    (from the preset when unset) uniformly spaced positions from 0 to
-    `propagation_distance`, and `num_records=1` returns the final field only.
+    Records: with `record_z`, exactly those positions, for any length
+    including one; otherwise `num_records` (from the preset when unset)
+    uniformly spaced positions from 0 to `propagation_distance`, and
+    `num_records=1` returns the field at `propagation_distance` only.
+    `result.final` is the last returned record, so it is the field at
+    `propagation_distance` only when the last position is that distance.
 
     Raises TypeError when an operator is not a function, ValueError for a bad
     pulse, an untranslatable operator or a bad option value, NlolibError when
