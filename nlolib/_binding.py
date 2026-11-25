@@ -242,6 +242,10 @@ class NloProgressInfo(ctypes.Structure):
         ("error", ctypes.c_double),
         ("elapsed_seconds", ctypes.c_double),
         ("eta_seconds", ctypes.c_double),
+        ("accepted_steps", ctypes.c_size_t),
+        ("rejected_steps", ctypes.c_size_t),
+        ("min_step_size", ctypes.c_double),
+        ("max_step_size", ctypes.c_double),
     ]
 
 

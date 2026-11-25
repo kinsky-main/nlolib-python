@@ -180,6 +180,10 @@ def _progress_info_from_struct(info: NloProgressInfo) -> ProgressInfo:
         error=float(info.error),
         elapsed_seconds=float(info.elapsed_seconds),
         eta_seconds=float(info.eta_seconds),
+        accepted_steps=int(info.accepted_steps),
+        rejected_steps=int(info.rejected_steps),
+        min_step_size=float(info.min_step_size),
+        max_step_size=float(info.max_step_size),
     )
 
 
