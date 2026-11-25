@@ -129,6 +129,10 @@ class ProgressInfo:
     error: float
     elapsed_seconds: float
     eta_seconds: float
+    accepted_steps: int
+    rejected_steps: int
+    min_step_size: float
+    max_step_size: float
 
 
 @dataclass(frozen=True)
